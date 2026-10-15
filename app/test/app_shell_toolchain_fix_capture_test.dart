@@ -16,68 +16,62 @@ import 'package:fh_radio_studio/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture toolchain install overlay with install-only log',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-      });
+  testWidgets('capture toolchain install overlay with install-only log', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureToolchainFixOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'toolchain_fix_overlay_regular.png'),
-      );
-      await _captureToolchainFixOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'toolchain_fix_overlay_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_TOOLCHAIN_FIX_OVERLAY'] != '1',
-  );
+    await _captureToolchainFixOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'toolchain_fix_overlay_regular.png'),
+    );
+    await _captureToolchainFixOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'toolchain_fix_overlay_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_TOOLCHAIN_FIX_OVERLAY'] != '1');
 
-  testWidgets(
-    'capture AI environment sync overlay',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-      });
+  testWidgets('capture AI environment sync overlay', (tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureAiEnvironmentSyncOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(
-          outDir.path,
-          'ai_environment_sync_overlay_regular.png',
-        ),
-      );
-      await _captureAiEnvironmentSyncOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'ai_environment_sync_overlay_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_AI_ENV_SYNC_OVERLAY'] != '1',
-  );
+    await _captureAiEnvironmentSyncOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(
+        outDir.path,
+        'ai_environment_sync_overlay_regular.png',
+      ),
+    );
+    await _captureAiEnvironmentSyncOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'ai_environment_sync_overlay_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_AI_ENV_SYNC_OVERLAY'] != '1');
 }
 
 Future<void> _captureToolchainFixOverlay(

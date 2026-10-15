@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/fh_radio_studio_cli.dart';
+import '../core/waveform_cache.dart';
+import 'editor_options.dart';
 import 'studio_state.dart';
 
 typedef AudioAnalysisCliRunner =
@@ -320,6 +322,9 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
     );
     final ffmpeg = _vendoredFfmpeg(repoRoot);
     final runner = ref.read(audioAnalysisCliRunnerProvider);
+    final slm = ref.read(editorOptionsProvider).slmEnabled;
+    final slmDll =
+        '${FhRadioStudioCli(repoRoot: repoRoot).uvRuntime.audioToolsDir}/seamless/loopfinder.dll';
     final result = await runner(
       repoRoot,
       [
@@ -330,6 +335,14 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
         '--bins',
         '320',
         if (ffmpeg != null) ...['--ffmpeg', ffmpeg],
+        if (slm) ...[
+          '--loop-engine',
+          'seamless',
+          '--slm-dll',
+          slmDll,
+          '--loop-cache-dir',
+          '${studio.projectDir}/analysis/seamless-loops',
+        ],
         '--json',
         '--progress-jsonl',
       ],
@@ -369,6 +382,12 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
         throw const FormatException('JSON root is not an object');
       }
       final parsed = AudioAnalysisResult.fromJson(map);
+      // Retain detected beats with the waveform for subsequent manual sessions.
+      try {
+        await WaveformCache.write(studio.projectDir, path, map);
+      } on Object {
+        // A missing optional cache must not invalidate successful analysis.
+      }
       state = AudioAnalysisState(
         busy: false,
         path: path,

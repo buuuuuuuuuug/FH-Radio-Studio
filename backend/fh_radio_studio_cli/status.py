@@ -6,10 +6,11 @@ from .baseline import (
     resolve_baseline_backup_path,
 )
 from .common import *
+from .deployment_paths import effective_game_file
 from .external_tools import collect_tool_status
 from .game import (
-    audio_dir_for,
     default_radio_info,
+    effective_audio_dir_for,
     find_station,
     game_root_for,
     is_forza_running,
@@ -30,7 +31,7 @@ from .language import (
 def build_status_payload(args: argparse.Namespace) -> Dict[str, object]:
     resolved_game_dir = resolve_game_dir(args.game_dir)
     game_dir = game_root_for(resolved_game_dir)
-    audio_dir = audio_dir_for(resolved_game_dir)
+    audio_dir = effective_audio_dir_for(resolved_game_dir)
     game_version = steam_game_version(game_dir)
     radio_info = default_radio_info(audio_dir)
 
@@ -61,7 +62,9 @@ def build_status_payload(args: argparse.Namespace) -> Dict[str, object]:
 
     current_table_md5s: Dict[str, Optional[str]] = {}
     for lang in available_languages:
-        current_table_md5s[lang] = md5_file(string_dir / f"{lang}.zip")
+        current_table_md5s[lang] = md5_file(
+            effective_game_file(game_dir, f"media/Stripped/StringTables/{lang}.zip")
+        )
 
     def infer_system_language() -> str:
         locale_name = (
@@ -163,7 +166,7 @@ def build_status_payload(args: argparse.Namespace) -> Dict[str, object]:
     preferred_is_auto = preferred_slot is None or str(preferred_slot).lower() == "auto"
     effective_preferred_slot = infer_system_language() if preferred_is_auto else preferred_slot
     target_lang = choose_language(effective_preferred_slot, [args.target, "EN", "GB", "JP", "CHS"])
-    target_path = string_dir / f"{target_lang}.zip"
+    target_path = effective_game_file(game_dir, f"media/Stripped/StringTables/{target_lang}.zip")
     target_sha = sha256_file(target_path)
     target_md5 = md5_file(target_path)
 
@@ -193,7 +196,7 @@ def build_status_payload(args: argparse.Namespace) -> Dict[str, object]:
         return (fallback, "fallback")
 
     source_lang, display_detection = detect_display_language()
-    source_path = string_dir / f"{source_lang}.zip"
+    source_path = effective_game_file(game_dir, f"media/Stripped/StringTables/{source_lang}.zip")
     source_sha = sha256_file(source_path)
     source_md5 = md5_file(source_path)
 

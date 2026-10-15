@@ -1,3 +1,4 @@
+import 'editor_timecode.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/replacement_models.dart';
@@ -8,6 +9,7 @@ import '../../widgets/confidence_pip.dart';
 import '../../widgets/rm_button.dart';
 import '../../widgets/rm_chip.dart';
 import '../../widgets/rm_icon.dart';
+import '../../widgets/time_input_field.dart';
 import 'group_colors.dart';
 
 /// 4 个时间组的卡片 — point (TD/PD) 和 loop (TL/PL) 由 `kind.isLoop` 区分。
@@ -30,8 +32,18 @@ class TimeGroupCard extends StatelessWidget {
     required this.onPreview,
     required this.onNudge,
     required this.bpm,
+    this.onPreviewCurrent,
+    this.onTimeEdited,
+    this.manualOnly = false,
+    this.hideCandidates = false,
+    this.onManualDoubleTap,
+    this.postLoopSyncNotice,
+    this.postLoopSyncLabel,
+    this.onPostLoopSync,
   });
 
+  final String? postLoopSyncNotice, postLoopSyncLabel;
+  final VoidCallback? onPostLoopSync;
   final GroupKind kind;
   final List<dynamic> candidates; // PointCandidate or LoopCandidate
   final int selectedIdx;
@@ -46,6 +58,11 @@ class TimeGroupCard extends StatelessWidget {
   final ValueChanged<int> onPreview;
   final void Function(FineTarget target, double deltaSec) onNudge;
   final double bpm;
+  final VoidCallback? onPreviewCurrent;
+  final bool manualOnly;
+  final bool hideCandidates;
+  final VoidCallback? onManualDoubleTap;
+  final void Function(FineTarget target, double seconds)? onTimeEdited;
 
   @override
   Widget build(BuildContext context) {
@@ -62,26 +79,49 @@ class TimeGroupCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _head(context, acc),
-          if (lowConfidence) _warnBar(context, acc),
+          if (lowConfidence && !manualOnly) _warnBar(context, acc),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _candidateHeading,
-                  style: RmText.mono(
-                    11,
-                    color: rm.fg3,
-                    letterSpacing: 0.08 * 11,
+                if (!manualOnly && !hideCandidates)
+                  Text(
+                    _candidateHeading,
+                    style: RmText.mono(
+                      11,
+                      color: rm.fg3,
+                      letterSpacing: 0.08 * 11,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                for (int i = 0; i < candidates.length; i++) ...[
-                  if (i != 0) const SizedBox(height: 8),
-                  _candRow(context, i),
+                if (!manualOnly && !hideCandidates) const SizedBox(height: 8),
+                if (!manualOnly && !hideCandidates)
+                  for (int i = 0; i < candidates.length; i++) ...[
+                    if (i != 0) const SizedBox(height: 8),
+                    _candRow(context, i),
+                  ],
+                if (!manualOnly && !hideCandidates) const SizedBox(height: 8),
+                if (onPostLoopSync != null) ...[
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (postLoopSyncNotice != null)
+                        Text(
+                          postLoopSyncNotice!,
+                          style: RmText.sans(11.5, color: rm.fg3),
+                        ),
+                      RmButton(
+                        size: RmButtonSize.sm,
+                        label: postLoopSyncLabel,
+                        onPressed: onPostLoopSync,
+                        tooltip: '只影响当前歌曲编辑；全局同步设置保持不变',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                 ],
-                const SizedBox(height: 8),
                 _manualRow(context),
                 const SizedBox(height: 12),
                 _fine(context),
@@ -104,7 +144,9 @@ class TimeGroupCard extends StatelessWidget {
     final rm = context.rm;
     final state = confirmed
         ? _ChipState.confirmed
-        : (candidates.isNotEmpty ? _ChipState.suggested : _ChipState.pending);
+        : (!manualOnly && candidates.isNotEmpty
+              ? _ChipState.suggested
+              : _ChipState.pending);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
@@ -145,6 +187,16 @@ class TimeGroupCard extends StatelessWidget {
             ),
           ),
           _stateChip(state),
+          if (onPreviewCurrent != null) ...[
+            const SizedBox(width: 8),
+            RmButton(
+              label: '试听',
+              size: RmButtonSize.sm,
+              leading: const RmIcon('play', size: 12),
+              tooltip: kind.isLoop ? '试听当前循环拼接' : '试听当前起点',
+              onPressed: onPreviewCurrent,
+            ),
+          ],
           if (!confirmed && candidates.isNotEmpty) ...[
             const SizedBox(width: 8),
             RmButton(
@@ -340,6 +392,7 @@ class TimeGroupCard extends StatelessWidget {
       enabled: !confirmed,
       background: bg,
       onTap: confirmed ? null : onManualRefine,
+      onDoubleTap: onManualDoubleTap,
       childBuilder: (context, hovered) {
         return Row(
           children: [
@@ -410,16 +463,27 @@ class TimeGroupCard extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             SizedBox(
-              width: 112,
+              width: 120,
               child: Align(
                 alignment: Alignment.centerRight,
                 child: confirmed
-                    ? RmChip(
-                        label: manualSelected ? '人工锁定' : '锁定',
-                        variant: manualSelected
-                            ? RmChipVariant.accent
-                            : RmChipVariant.muted,
-                        leading: const RmIcon('lock', size: 10),
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          RmChip(
+                            label: manualSelected ? '人工锁定' : '锁定',
+                            variant: manualSelected
+                                ? RmChipVariant.accent
+                                : RmChipVariant.muted,
+                            leading: const RmIcon('lock', size: 10),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '双击解锁并精修',
+                            style: RmText.sans(10, color: rm.fg3),
+                          ),
+                        ],
                       )
                     : MouseRegion(
                         cursor: SystemMouseCursors.click,
@@ -464,7 +528,7 @@ class TimeGroupCard extends StatelessWidget {
           Row(
             children: [
               Text(
-                formatTimecode(lc.start),
+                formatEditorTimecode(lc.start),
                 style: RmText.mono(13, weight: FontWeight.w600, color: primary),
               ),
               Padding(
@@ -472,12 +536,12 @@ class TimeGroupCard extends StatelessWidget {
                 child: Text('→', style: RmText.sans(12, color: secondary)),
               ),
               Text(
-                formatTimecode(lc.end),
+                formatEditorTimecode(lc.end),
                 style: RmText.mono(13, weight: FontWeight.w600, color: primary),
               ),
               const SizedBox(width: 8),
               Text(
-                'Δ ${(lc.end - lc.start).toStringAsFixed(2)}s · ${lc.bars} 小节',
+                'Δ ${(lc.end - lc.start).toStringAsFixed(3)}s · ${lc.bars} 小节',
                 style: RmText.mono(10.5, color: secondary),
               ),
             ],
@@ -494,7 +558,7 @@ class TimeGroupCard extends StatelessWidget {
           Row(
             children: [
               Text(
-                formatTimecode(pc.t),
+                formatEditorTimecode(pc.t),
                 style: RmText.mono(13, weight: FontWeight.w600, color: primary),
               ),
               const SizedBox(width: 6),
@@ -529,7 +593,8 @@ class TimeGroupCard extends StatelessWidget {
             child: _fineCell(
               context,
               label: 'A · start',
-              value: formatTimecode(lc.start),
+              value: formatEditorTimecode(lc.start),
+              seconds: lc.start,
               target: FineTarget.loopStart,
               includeMsControls: false,
               locked: confirmed,
@@ -540,7 +605,8 @@ class TimeGroupCard extends StatelessWidget {
             child: _fineCell(
               context,
               label: 'B · end',
-              value: formatTimecode(lc.end),
+              value: formatEditorTimecode(lc.end),
+              seconds: lc.end,
               target: FineTarget.loopEnd,
               includeMsControls: false,
               locked: confirmed,
@@ -553,7 +619,8 @@ class TimeGroupCard extends StatelessWidget {
       return _fineCell(
         context,
         label: '已选',
-        value: formatTimecode(pc.t),
+        value: formatEditorTimecode(pc.t),
+        seconds: pc.t,
         target: FineTarget.point,
         includeMsControls: true,
         locked: confirmed,
@@ -565,6 +632,7 @@ class TimeGroupCard extends StatelessWidget {
     BuildContext context, {
     required String label,
     required String value,
+    required double seconds,
     required FineTarget target,
     required bool includeMsControls,
     required bool locked,
@@ -586,15 +654,14 @@ class TimeGroupCard extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              value,
-              style: RmText.mono(
-                14,
-                weight: FontWeight.w600,
-                color: locked ? rm.fg3 : rm.fg,
-              ),
+            child: TimeInputField(
+              seconds: seconds,
+              onCommit: onTimeEdited == null
+                  ? null
+                  : (seconds) => onTimeEdited!(target, seconds),
             ),
           ),
+          const SizedBox(width: 8),
           RmButton(
             onPressed: locked ? null : () => onNudge(target, -beat),
             size: RmButtonSize.sm,
@@ -666,12 +733,14 @@ class _RainbowManualRefineCard extends StatefulWidget {
     required this.enabled,
     required this.background,
     required this.onTap,
+    this.onDoubleTap,
     required this.childBuilder,
   });
 
   final bool enabled;
   final Color background;
   final VoidCallback? onTap;
+  final VoidCallback? onDoubleTap;
   final Widget Function(BuildContext context, bool hovered) childBuilder;
 
   @override
@@ -683,6 +752,36 @@ class _RainbowManualRefineCardState extends State<_RainbowManualRefineCard>
     with SingleTickerProviderStateMixin {
   late final AnimationController _flow;
   bool _hovered = false;
+  Offset? _downPosition, _lastTapPosition;
+  Duration? _lastTapTime;
+  Widget _doubleTapArea(Widget child) => Listener(
+    behavior: HitTestBehavior.opaque,
+    onPointerDown: (event) =>
+        _downPosition = event.buttons == 1 ? event.localPosition : null,
+    onPointerUp: (event) {
+      if (widget.enabled ||
+          widget.onDoubleTap == null ||
+          _downPosition == null ||
+          (event.localPosition - _downPosition!).distance > 6) {
+        return;
+      }
+      final delta = _lastTapTime == null
+          ? null
+          : event.timeStamp - _lastTapTime!;
+      if (delta != null &&
+          delta.inMilliseconds >= 0 &&
+          delta.inMilliseconds <= 300 &&
+          _lastTapPosition != null &&
+          (event.localPosition - _lastTapPosition!).distance < 16) {
+        _lastTapTime = null;
+        widget.onDoubleTap!();
+      } else {
+        _lastTapTime = event.timeStamp;
+        _lastTapPosition = event.localPosition;
+      }
+    },
+    child: child,
+  );
 
   @override
   void initState() {
@@ -728,39 +827,44 @@ class _RainbowManualRefineCardState extends State<_RainbowManualRefineCard>
           : SystemMouseCursors.basic,
       onEnter: (_) => _setHovered(true),
       onExit: (_) => _setHovered(false),
-      child: GestureDetector(
-        onTap: widget.enabled ? widget.onTap : null,
-        child: AnimatedSlide(
-          offset: _hovered && widget.enabled
-              ? const Offset(0, -0.035)
-              : Offset.zero,
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOutCubic,
-          child: CustomPaint(
-            painter: _RainbowManualRefineGlowPainter(
-              animation: _flow,
-              hovered: _hovered,
-              enabled: widget.enabled,
-              borderRadius: radius,
-            ),
-            foregroundPainter: _RainbowManualRefineBorderPainter(
-              animation: _flow,
-              hovered: _hovered,
-              enabled: widget.enabled,
-              borderRadius: radius,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: widget.background,
+      child: _doubleTapArea(
+        GestureDetector(
+          onTap: widget.enabled ? widget.onTap : null,
+          child: AnimatedSlide(
+            offset: _hovered && widget.enabled
+                ? const Offset(0, -0.035)
+                : Offset.zero,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOutCubic,
+            child: CustomPaint(
+              painter: _RainbowManualRefineGlowPainter(
+                animation: _flow,
+                hovered: _hovered,
+                enabled: widget.enabled,
                 borderRadius: radius,
               ),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 74),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
+              foregroundPainter: _RainbowManualRefineBorderPainter(
+                animation: _flow,
+                hovered: _hovered,
+                enabled: widget.enabled,
+                borderRadius: radius,
+              ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: widget.background,
+                  borderRadius: radius,
                 ),
-                child: widget.childBuilder(context, _hovered && widget.enabled),
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 74),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: widget.childBuilder(
+                    context,
+                    _hovered && widget.enabled,
+                  ),
+                ),
               ),
             ),
           ),

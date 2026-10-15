@@ -347,3 +347,17 @@ The CI workflows regenerate ignored test fixtures before Flutter tests. Keep `te
 - Prefer structured JSON contracts over parsing CLI human output.
 - Keep package and baseline behavior aligned with the documented data contracts.
 - Do not commit generated workspaces, build outputs, local media, or internal notes.
+
+## Complete submission checks
+
+From the repository root, run `./tools/check_submission.ps1`. It checks source
+formatting, runs Python tests against a mock game, regenerates the full-flow test
+project, then runs Flutter analysis and the complete Flutter test suite. It never
+uses a real game installation or imported music. The fixture generation order is
+required: several catalog and screen tests consume `test/project/cli-full-flow`.
+
+Use `-SkipFormat` only when the equivalent pre-commit checks already passed.
+The optional real-project performance probe is disabled by default; set
+`FH_STUDIO_PERFORMANCE_PROJECT` to a disposable project copy when explicitly
+running that probe. Personal project paths, delivery logs and installed runtime
+inventories are not repository inputs.

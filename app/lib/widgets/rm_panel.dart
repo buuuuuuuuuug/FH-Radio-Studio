@@ -85,9 +85,14 @@ class RmPanel extends StatelessWidget {
 
                     return Row(
                       children: [
-                        Expanded(child: titleGroup),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth * .45,
+                          ),
+                          child: titleGroup,
+                        ),
                         const SizedBox(width: 16),
-                        trailing,
+                        Expanded(child: trailing),
                       ],
                     );
                   },

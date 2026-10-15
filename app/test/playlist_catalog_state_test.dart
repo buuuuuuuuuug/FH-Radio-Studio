@@ -921,7 +921,7 @@ void main() {
     expect(container.read(playlistPlanProvider).assignments, isEmpty);
   });
 
-  test('ignores persisted playlist draft on startup', () async {
+  test('restores the explicitly saved playlist on startup', () async {
     final project = Directory.systemTemp.createTempSync(
       'fh-radio-studio-playlist-plan-',
     );
@@ -949,8 +949,14 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    expect(container.read(playlistPlanProvider).assignments, isEmpty);
-    expect(container.read(effectivePlaylistPlanProvider).assignments, isEmpty);
+    expect(
+      container.read(playlistPlanProvider).assignmentsForPath(source),
+      hasLength(1),
+    );
+    expect(
+      container.read(effectivePlaylistPlanProvider).assignmentsForPath(source),
+      hasLength(1),
+    );
   });
 
   test('playlist plan store keeps project sources and siren assignments', () {

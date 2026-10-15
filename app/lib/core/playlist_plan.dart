@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'path_keys.dart';
 import 'project_refs.dart';
 import 'project_workspace.dart';
+import 'project_json_guard.dart';
 import 'track_metadata_cache.dart';
 
 class PlaylistAssignment {
@@ -193,6 +194,28 @@ class PlaylistPlan {
     return items;
   }
 
+  PlaylistPlan moveBefore({
+    required String source,
+    required String beforeSource,
+    required String radioCode,
+    required String playlistType,
+  }) {
+    final ordered = assignmentsForRadio(radioCode, playlistType);
+    final from = ordered.indexWhere((a) => sameCanonicalPath(a.source, source));
+    if (from < 0) return this;
+    final moved = ordered.removeAt(from);
+    final before = ordered.indexWhere(
+      (a) => sameCanonicalPath(a.source, beforeSource),
+    );
+    ordered.insert(before < 0 ? ordered.length : before, moved);
+    final result = {...assignments};
+    for (var i = 0; i < ordered.length; i++) {
+      final next = ordered[i].copyWith(slot: i + 1);
+      result[next.assignmentKey] = next;
+    }
+    return PlaylistPlan(assignments: result, builtinTargets: builtinTargets);
+  }
+
   bool hasAssignmentsForRadio(String radioCode, String playlistType) {
     return assignmentsForRadio(radioCode, playlistType).isNotEmpty;
   }
@@ -204,6 +227,19 @@ class PlaylistPlan {
       if (!_sameStringList(freeRoam, event)) return true;
     }
     return false;
+  }
+
+  /// Both scenarios share one physical bank; identical sources use one slot.
+  bool canFitRadioSources(
+    String radioCode,
+    Iterable<String> additions,
+    int capacity,
+  ) {
+    final sources = {
+      ...sourcesForRadio(radioCode).map(PlaylistAssignment.keyForPath),
+      ...additions.map(PlaylistAssignment.keyForPath),
+    };
+    return sources.length <= capacity;
   }
 
   List<String> sourcesForRadio(String radioCode) {
@@ -218,7 +254,10 @@ class PlaylistPlan {
         .toList();
     items.sort(_assignmentSort);
     for (final assignment in items) {
-      if (seen.add(assignment.trackKey)) out.add(assignment.source);
+      // Legacy path keys and durable track keys can describe the same file.
+      if (seen.add(PlaylistAssignment.keyForPath(assignment.source))) {
+        out.add(assignment.source);
+      }
     }
     return out;
   }
@@ -528,6 +567,24 @@ class PlaylistPlanStore {
     } on FileSystemException {
       // Best-effort cleanup; the next project open can retry this legacy file.
     }
+  }
+
+  static void write(String projectDir, PlaylistPlan plan) {
+    FhRadioStudioProject.ensure(projectDir);
+    final file = File(configPath(projectDir));
+    if (file.existsSync()) {
+      final previous = jsonDecode(file.readAsStringSync(encoding: utf8));
+      if (previous is! Map ||
+          previous['assignments'] is! List ||
+          (previous['assignments'] as List).any((entry) => entry is! Map)) {
+        throw const FormatException('播放列表配置格式无效，已保留原文件，请先恢复备份。');
+      }
+    }
+    writeProjectJsonSync(
+      projectDir: projectDir,
+      file: file,
+      payload: jsonDecode(plan.encodeForCli()) as Map<String, dynamic>,
+    );
   }
 
   static PlaylistPlan projectSourcesOnly(String projectDir, PlaylistPlan plan) {

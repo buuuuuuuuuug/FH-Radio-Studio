@@ -17,93 +17,88 @@ import 'package:fh_radio_studio/theme/tokens.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture replace editor route with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      SharedPreferences.setMockInitialValues({
-        'rm.studio.projectDir': 'capture',
-        'rm.studio.repoRoot': p.dirname(p.current),
-      });
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+  testWidgets('capture replace editor route with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    SharedPreferences.setMockInitialValues({
+      'rm.studio.projectDir': 'capture',
+      'rm.studio.repoRoot': p.dirname(p.current),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureReplaceEditor(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'replace_editor_regular.png'),
-      );
-      await _captureReplaceEditor(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(outDir.path, 'replace_editor_full.png'),
-      );
-      await _captureReplaceEditorSavePrompt(
-        tester,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(
-          outDir.path,
-          'replace_editor_save_prompt_regular.png',
-        ),
-      );
-      await _captureReplaceEditorSavePrompt(
-        tester,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(outDir.path, 'replace_editor_save_prompt_full.png'),
-      );
-      await _captureReplaceEditorManualRefine(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'replace_editor_manual_regular.png'),
-      );
-      await _captureReplaceEditorManualRefine(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(outDir.path, 'replace_editor_manual_full.png'),
-      );
-      await _captureReplaceEditorManualRefine(
-        tester,
-        prefs: prefs,
-        kind: GroupKind.td,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(
-          outDir.path,
-          'replace_editor_manual_point_regular.png',
-        ),
-      );
-      await _captureReplaceEditorManualRefine(
-        tester,
-        prefs: prefs,
-        kind: GroupKind.td,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(outDir.path, 'replace_editor_manual_point_full.png'),
-      );
-      await _captureReplaceEditorManualRowHover(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(
-          outDir.path,
-          'replace_editor_manual_row_hover_regular.png',
-        ),
-      );
-      await _captureReplaceEditorManualRowHover(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(
-          outDir.path,
-          'replace_editor_manual_row_hover_full.png',
-        ),
-      );
-    },
-    skip: Platform.environment['CAPTURE_REPLACE_EDITOR'] != '1',
-  );
+    await _captureReplaceEditor(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'replace_editor_regular.png'),
+    );
+    await _captureReplaceEditor(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(outDir.path, 'replace_editor_full.png'),
+    );
+    await _captureReplaceEditorSavePrompt(
+      tester,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'replace_editor_save_prompt_regular.png'),
+    );
+    await _captureReplaceEditorSavePrompt(
+      tester,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(outDir.path, 'replace_editor_save_prompt_full.png'),
+    );
+    await _captureReplaceEditorManualRefine(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'replace_editor_manual_regular.png'),
+    );
+    await _captureReplaceEditorManualRefine(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(outDir.path, 'replace_editor_manual_full.png'),
+    );
+    await _captureReplaceEditorManualRefine(
+      tester,
+      prefs: prefs,
+      kind: GroupKind.td,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(
+        outDir.path,
+        'replace_editor_manual_point_regular.png',
+      ),
+    );
+    await _captureReplaceEditorManualRefine(
+      tester,
+      prefs: prefs,
+      kind: GroupKind.td,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(outDir.path, 'replace_editor_manual_point_full.png'),
+    );
+    await _captureReplaceEditorManualRowHover(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(
+        outDir.path,
+        'replace_editor_manual_row_hover_regular.png',
+      ),
+    );
+    await _captureReplaceEditorManualRowHover(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(
+        outDir.path,
+        'replace_editor_manual_row_hover_full.png',
+      ),
+    );
+  }, skip: Platform.environment['CAPTURE_REPLACE_EDITOR'] != '1');
 }
 
 Future<void> _captureReplaceEditorManualRowHover(

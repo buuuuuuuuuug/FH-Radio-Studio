@@ -93,3 +93,8 @@ test/project/
 /*.tar
 /*.tar.gz
 /*.tgz
+
+# Machine-specific audit and delivery artifacts
+expansion_protection_inventory.json
+validation/
+local-only/

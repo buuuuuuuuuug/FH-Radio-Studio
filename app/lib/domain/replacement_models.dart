@@ -375,6 +375,7 @@ String formatSamples(double seconds, int sampleRate) {
 
 /// 给一个时间点找到包含它的 segment（fallback 最后一个）。
 Segment segmentAt(List<Segment> segments, double t) {
+  if (segments.isEmpty) return const Segment(start: 0, end: 0, label: '未分析');
   for (final s in segments) {
     if (t >= s.start && t < s.end) return s;
   }
@@ -383,6 +384,7 @@ Segment segmentAt(List<Segment> segments, double t) {
 
 /// 用于波形 painter 的"伪噪声" — 与 design/components/waveform.jsx 的 seedNoise + buildWaveform 等效。
 class WaveformBars {
+  static final Expando<WaveformBars> _cache = Expando<WaveformBars>();
   WaveformBars._(this.values);
   final List<double> values;
 
@@ -392,6 +394,7 @@ class WaveformBars {
     int barCount = 220,
     int seed = 42,
   }) {
+    if (segments.isEmpty) return WaveformBars._(List.filled(barCount, 0));
     int s = seed;
     double rand() {
       s = (s * 1664525 + 1013904223) & 0xFFFFFFFF;
@@ -419,48 +422,16 @@ class WaveformBars {
 
   factory WaveformBars.fromValues(List<double> values) {
     if (values.isEmpty) return WaveformBars._(const []);
+    final cached = _cache[values];
+    if (cached != null) return cached;
     final finite = [
       for (final value in values)
         if (value.isFinite) value.clamp(0.0, 1.0).toDouble(),
     ];
     if (finite.isEmpty) return WaveformBars._(const []);
-    final sorted = [...finite]..sort();
-    final low = _percentile(sorted, 0.08);
-    final high = _percentile(sorted, 0.96);
-    final maxValue = sorted.last <= 0 ? 1.0 : sorted.last;
-    final range = high - low;
-    return WaveformBars._([
-      for (final value in finite)
-        _displayAmplitude(value, low, range, maxValue),
-    ]);
-  }
-
-  static double _displayAmplitude(
-    double value,
-    double low,
-    double range,
-    double maxValue,
-  ) {
-    if (value <= 0.0001) return 0.05;
-    final absolute = (value / maxValue).clamp(0.0, 1.0).toDouble();
-    final relative = range < 0.04
-        ? absolute
-        : ((value - low) / range).clamp(0.0, 1.0).toDouble();
-    final shaped = math.pow(relative, 0.72).toDouble();
-    return (0.05 + absolute * 0.10 + shaped * 0.72)
-        .clamp(0.05, 0.87)
-        .toDouble();
-  }
-
-  static double _percentile(List<double> sorted, double p) {
-    if (sorted.isEmpty) return 0;
-    if (sorted.length == 1) return sorted.first;
-    final position = p.clamp(0.0, 1.0) * (sorted.length - 1);
-    final lower = position.floor();
-    final upper = position.ceil();
-    if (lower == upper) return sorted[lower];
-    final weight = position - lower;
-    return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+    // The CLI already normalizes RMS and peaks against the same audio peak.
+    // Keep their linear proportions; a second contrast stretch clips dynamics.
+    return _cache[values] = WaveformBars._(finite);
   }
 
   static double _energyForLabel(String label) {

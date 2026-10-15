@@ -17,36 +17,34 @@ import 'package:fh_radio_studio/theme/tokens.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture dashboard confirm dialog with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      final tempRoot = Directory.systemTemp.createTempSync(
-        'fh_radio_studio_dashboard_confirm_capture_',
-      );
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-        if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
-      });
+  testWidgets('capture dashboard confirm dialog with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final tempRoot = Directory.systemTemp.createTempSync(
+      'fh_radio_studio_dashboard_confirm_capture_',
+    );
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
+    });
 
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
-      await _captureConfirmDialog(
-        tester,
-        tempRoot: tempRoot,
-        logicalSize: const Size(1244, 900),
-        outputPath: p.join(outDir.path, 'dashboard_confirm_dialog_regular.png'),
-      );
-      await _captureConfirmDialog(
-        tester,
-        tempRoot: tempRoot,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'dashboard_confirm_dialog_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_DASHBOARD_CONFIRM_DIALOG'] != '1',
-  );
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
+    await _captureConfirmDialog(
+      tester,
+      tempRoot: tempRoot,
+      logicalSize: const Size(1244, 900),
+      outputPath: p.join(outDir.path, 'dashboard_confirm_dialog_regular.png'),
+    );
+    await _captureConfirmDialog(
+      tester,
+      tempRoot: tempRoot,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'dashboard_confirm_dialog_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_DASHBOARD_CONFIRM_DIALOG'] != '1');
 }
 
 Future<void> _captureConfirmDialog(

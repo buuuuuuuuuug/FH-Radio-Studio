@@ -23,12 +23,16 @@ from .loudness import (
 from .metadata import cmd_scan_metadata
 from .migration import cmd_migrate_project
 from .package import cmd_build_package
+from .package_estimate import cmd_estimate_package
 from .prepare import cmd_prepare_track
 from .radio_xml import cmd_patch_xml
 from .reconstruct_plan import cmd_reconstruct_plan
+from .seamless_loop import cmd_seamless_loops
 from .status import cmd_status
+from .timing_import import cmd_export_timings, cmd_import_timings
 from .toolchain import PROFILES as TOOLCHAIN_PROFILES
 from .toolchain import cmd_toolchain_status
+from .waveform import cmd_waveform_audio
 
 
 def add_audio_analysis_args(parser: argparse.ArgumentParser, *, default_profile: str) -> None:
@@ -43,6 +47,9 @@ def add_audio_analysis_args(parser: argparse.ArgumentParser, *, default_profile:
         help="Fallback BPM until deep beat detection is installed",
     )
     parser.add_argument("--max-beats", type=int, default=800)
+    parser.add_argument("--loop-engine", choices=("original", "seamless"), default="original")
+    parser.add_argument("--slm-dll")
+    parser.add_argument("--loop-cache-dir")
     parser.add_argument(
         "--ffmpeg", help="Optional ffmpeg executable for formats libsndfile cannot read"
     )
@@ -191,6 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--post-loop-end-sec", type=float)
     prepare.set_defaults(func=cmd_prepare_track)
 
+    slm = sub.add_parser(
+        "analyze-seamless-loops", help="Experimental native loop analysis; no AI models"
+    )
+    slm.add_argument("input")
+    slm.add_argument("--slm-dll", required=True)
+    slm.add_argument("--cache-dir")
+    slm.add_argument("--ffmpeg")
+    slm.add_argument("--force", action="store_true")
+    slm.set_defaults(func=cmd_seamless_loops)
+
     analyze = sub.add_parser(
         "analyze-audio", help="Analyze audio with the current AI contract; defaults to local-base"
     )
@@ -316,6 +333,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     patch.set_defaults(func=cmd_patch_xml)
 
+    timing_import = sub.add_parser(
+        "import-timings", help="Preview or atomically import explicit timing data"
+    )
+    timing_import.add_argument("--project-dir", required=True)
+    timing_import.add_argument("--input", default="-")
+    timing_import.add_argument(
+        "--format", default="auto", choices=["auto", "json", "csv", "tsv", "txt", "text", "xlsx"]
+    )
+    timing_import.add_argument("--overwrite", action="store_true")
+    timing_import.add_argument("--confirm", action="store_true")
+    timing_import.add_argument("--apply", action="store_true")
+    timing_import.add_argument("--expected-snapshot")
+    timing_import.add_argument("--expected-input")
+    timing_import.add_argument(
+        "--match-mode",
+        default="auto",
+        choices=["auto", "filename", "title", "title-artist", "artist-title"],
+    )
+    timing_import.add_argument("--assign-radio", action="store_true")
+    timing_import.set_defaults(func=cmd_import_timings)
+    timing_export = sub.add_parser("export-timings", help="Export saved timing points as CSV data")
+    timing_export.add_argument("--project-dir", required=True)
+    timing_export.add_argument(
+        "--identity",
+        default="filename",
+        choices=["filename", "title", "title-artist", "artist-title"],
+    )
+    timing_export.add_argument("--include-radio", action="store_true")
+    timing_export.set_defaults(func=cmd_export_timings)
+
+    estimate = sub.add_parser("estimate-package", help="Read-only estimated package file sizes")
+    estimate.add_argument("--project-dir", required=True)
+    estimate.add_argument("--baseline-manifest", required=True)
+    estimate.add_argument("--playlist-plan", required=True)
+    estimate.add_argument("--playlist-from-package")
+    estimate.add_argument("--expand-slots", action="store_true")
+    estimate.set_defaults(func=cmd_estimate_package)
+
     package = sub.add_parser(
         "build-package", help="Build a staged FH radio package with rebuilt .assets.bank"
     )
@@ -349,7 +404,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     package.add_argument("--playlist-mode", choices=("add", "only"), default="only")
     package.add_argument("--gain-db", type=float, default=-15.0, help=argparse.SUPPRESS)
-    package.add_argument("--quality", type=int, default=50, help="fsbankcl vorbis quality")
+    package.add_argument("--quality", type=int, default=50, help="fsbankcl vorbis quality (1..100)")
+    package.add_argument(
+        "--expand-slots",
+        action="store_true",
+        help="Experimental: rebuild native sound indexing and allow additional tracks",
+    )
     package.add_argument("--bpm", default="0")
     package.add_argument(
         "--timing-manifest", help="JSON file with saved per-track marker seconds from the editor"
@@ -490,6 +550,13 @@ def build_parser() -> argparse.ArgumentParser:
     baseline_bump.add_argument("--yes", action="store_true")
     baseline_bump.set_defaults(func=cmd_baseline)
 
+    waveform = sub.add_parser("waveform-audio", help="Decode/cache the actual waveform without AI")
+    waveform.add_argument("input")
+    waveform.add_argument("--cache-dir")
+    waveform.add_argument("--bins", type=int, default=8192)
+    waveform.add_argument("--ffmpeg")
+    waveform.set_defaults(func=cmd_waveform_audio)
+
     deploy = sub.add_parser(
         "deploy-package",
         help="Copy a built package into FH6 after validating against the pristine baseline",
@@ -497,6 +564,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_game_arg(deploy)
     deploy.add_argument(
         "package_dir", help="Package directory from build-package, or its package subfolder"
+    )
+    deploy.add_argument(
+        "--target-root",
+        choices=["mediapc", "media"],
+        default="mediapc",
+        help="Write an override to mediapc (default), or overwrite original media files",
     )
     deploy.add_argument("--baseline-manifest", help="Current pristine baseline manifest")
     deploy.add_argument(

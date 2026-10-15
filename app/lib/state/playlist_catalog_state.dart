@@ -190,17 +190,17 @@ final playlistCatalogForViewProvider =
             gameDir: state.gameDir,
             sourceLang: state.sourceLang,
             targetLang: state.targetLang,
-            bankSlotOverrides: {
-              for (final option in state.radioOptions)
-                if (option.bankSlots != null && option.bankSlots! > 0)
-                  _radioCodeFor(option.number, option.name): option.bankSlots!,
-            },
+            bankSlotOptions: state.radioOptions,
           ),
         ),
       );
       final bankSlotOverrides = baselineBankSlotOverrides.isNotEmpty
           ? baselineBankSlotOverrides
-          : state.bankSlotOverrides;
+          : {
+              for (final option in state.bankSlotOptions)
+                if (option.bankSlots != null && option.bankSlots! > 0)
+                  _radioCodeFor(option.number, option.name): option.bankSlots!,
+            };
       return loadPlaylistCatalog(
         view: view,
         packageDir: state.packageDir,
@@ -525,6 +525,12 @@ Directory? _gameAudioDir(String gameDir) {
   if (gameDir.trim().isEmpty) return null;
   final root = Directory(gameDir);
   final candidates = [
+    if (Directory(p.join(root.path, 'mediapc', 'audio')).existsSync() &&
+        Directory(p.join(root.path, 'mediapc', 'audio'))
+            .listSync(followLinks: false)
+            .whereType<File>()
+            .any((f) => p.basename(f.path).startsWith('RadioInfo_')))
+      Directory(p.join(root.path, 'mediapc', 'audio')),
     Directory(p.join(root.path, 'media', 'audio')),
     if (p.basename(root.path).toLowerCase() == 'audio') root,
   ];

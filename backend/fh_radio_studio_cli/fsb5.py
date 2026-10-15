@@ -179,6 +179,8 @@ def splice_fsb5_into_bank(original_bank: Path, new_fsb5: bytes, out_bank: Path) 
     old_start = info.bank_offset
     old_end = old_start + info.total_size
     delta = len(new_fsb5) - info.total_size
+    if len(raw) + delta >= 2**31:
+        die("Radio bank must be smaller than 2 GiB; lower build quality or reduce tracks")
     size_fields = find_covering_riff_size_fields(raw, old_start)
     new_bank = bytearray(raw[:old_start] + new_fsb5 + raw[old_end:])
 

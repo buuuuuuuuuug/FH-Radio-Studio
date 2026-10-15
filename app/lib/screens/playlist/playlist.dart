@@ -1,9 +1,23 @@
+import '../../widgets/quick_assign_dialog.dart';
+import '../../core/track_timing_config.dart';
+import '../../state/editor_navigation.dart';
+import '../../core/song_selection.dart';
+import '../../widgets/batch_assignment_dialog.dart';
+import 'package:go_router/go_router.dart';
+import '../../state/router.dart';
+import '../../state/editor_options.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import '../../widgets/contained_scroll.dart';
+import '../../widgets/playlist_layout_controls.dart';
+import '../../state/layout_options.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/playlist_plan.dart';
+import '../../core/song_browse.dart';
+import '../../widgets/song_browse_controls.dart';
 import '../../domain/radio_library.dart';
 import '../../state/studio_state.dart';
 import '../../state/playlist_catalog_state.dart';
@@ -35,6 +49,189 @@ class PlaylistScreen extends ConsumerStatefulWidget {
 }
 
 class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
+  final _boardScroll = ScrollController();
+  Timer? _rowSnapTimer;
+  double _rowExtent = 0;
+  bool _snapping = false;
+  bool _snapOnScroll(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is ScrollStartNotification ||
+        notification is ScrollUpdateNotification ||
+        notification is OverscrollNotification) {
+      _rowSnapTimer?.cancel();
+      return false;
+    }
+    if (notification is! ScrollEndNotification ||
+        _snapping ||
+        ref.read(layoutOptionsProvider).heightMode != RadioHeightMode.oneRow) {
+      return false;
+    }
+    _rowSnapTimer?.cancel();
+    _rowSnapTimer = Timer(const Duration(milliseconds: 700), () async {
+      if (!mounted ||
+          !_boardScroll.hasClients ||
+          _boardScroll.position.isScrollingNotifier.value ||
+          _rowExtent <= 0 ||
+          ref.read(layoutOptionsProvider).heightMode !=
+              RadioHeightMode.oneRow) {
+        return;
+      }
+      final target = (_boardScroll.offset / _rowExtent).round() * _rowExtent;
+      final offset = target.clamp(0.0, _boardScroll.position.maxScrollExtent);
+      if ((offset - _boardScroll.offset).abs() < 1) return;
+      _snapping = true;
+      try {
+        await _boardScroll.animateTo(
+          offset,
+          duration: const Duration(milliseconds: 190),
+          curve: Curves.easeOutCubic,
+        );
+      } finally {
+        _snapping = false;
+      }
+    });
+    return false;
+  }
+
+  Object? _radioWidgetInputs,
+      _poolWidgetInputs,
+      _poolPlanInputs,
+      _displayPoolInputs;
+  List<Widget> _cachedRadioWidgets = const [];
+  Widget? _cachedPoolWidget;
+  PlaylistPlan? _cachedPoolPlan;
+  List<PoolTrack> _cachedDisplayPool = const [];
+
+  late final TextEditingController _search;
+  @override
+  void initState() {
+    super.initState();
+    _search = TextEditingController(text: ref.read(playlistProvider).search);
+  }
+
+  @override
+  void dispose() {
+    _selectionSignal.dispose();
+    _rowSnapTimer?.cancel();
+    _boardScroll.dispose();
+    _search.dispose();
+    super.dispose();
+  }
+
+  SongBrowse _browse = const SongBrowse();
+  final _selectionSignal = ValueNotifier(SongSelection());
+  SongSelection get _selection => _selectionSignal.value;
+  set _selection(SongSelection value) => _selectionSignal.value = value;
+  bool _selecting = false;
+  String _selectionProject = '';
+  void _selectPoolTrack(
+    PoolTrack track,
+    List<PoolTrack> visible, {
+    bool control = false,
+    bool range = false,
+  }) {
+    if (!_selecting && !control && !range) return;
+    final selection = _selection.click(
+      track.id,
+      visible.map((t) => t.id).toList(),
+      range: range,
+    );
+    if (!_selecting) {
+      setState(() => _selecting = true);
+    }
+    _selection = selection;
+  }
+
+  Future<void> _assignSelected(List<PoolTrack> visible) async {
+    final state = ref.read(playlistProvider);
+    final ids = _selection.ids;
+    final tracks = [
+      for (final t in visible)
+        if (ids.contains(t.id)) t,
+      for (final t in state.pool)
+        if (ids.contains(t.id) && !visible.any((v) => v.id == t.id)) t,
+    ];
+    if (tracks.isEmpty) return;
+    final catalog = ref.read(playlistCatalogProvider);
+    final baseline = ref.read(baselinePlaylistCatalogProvider);
+    final radios = catalog.radios
+        .where((r) => isUiSupportedRadio(name: r.name))
+        .toList();
+    if (radios.isEmpty) return;
+    final project = ref.read(studioProvider).projectDir;
+    final plan = ref.read(effectivePlaylistPlanProvider);
+    final expansion = ref.read(editorOptionsProvider).expansionEnabled;
+    final choice = await showDialog<({String radio, String type, int limit})>(
+      context: context,
+      builder: (_) => BatchAssignmentDialog(
+        radios: radios,
+        tracks: tracks,
+        splitTypes: state.splitPlaylistTypes,
+        initialType: state.mode == PlaylistMode.event ? 'Event' : 'FreeRoam',
+        info: (radio, type) {
+          var base = plan;
+          if (!base.hasDraft &&
+              !ref.read(playlistPlanProvider.notifier).hasUserPlan) {
+            base = playlistPlanFromCatalog(
+              catalog,
+              state.pool,
+              projectDir: project,
+              includeBuiltinTargets: false,
+            );
+          }
+          if (!state.splitPlaylistTypes) {
+            base = base.syncPlaylistTypesFrom(type);
+          }
+          final current = base.assignmentsForRadio(radio.code, type).length;
+          final added = tracks
+              .where(
+                (t) =>
+                    base.assignmentFor(
+                      source: t.source,
+                      radioCode: radio.code,
+                      playlistType: type,
+                    ) ==
+                    null,
+              )
+              .length;
+          final original =
+              baseline?.tracksOfRadio(radio.code, type).length ?? 0;
+          return BatchAssignmentInfo(
+            total: current + added,
+            added: added,
+            limit: expansion ? 4096 : (original > 0 ? original : radio.slot),
+            replacesBuiltin:
+                current == 0 &&
+                catalog.modeOfList(radio.code, type) != StationMode.custom,
+          );
+        },
+      ),
+    );
+    if (choice == null ||
+        !mounted ||
+        ref.read(studioProvider).projectDir != project) {
+      return;
+    }
+    final success = ref
+        .read(playlistProvider.notifier)
+        .assignManyToRadio(
+          tracks.map((t) => t.id).toList(),
+          choice.radio,
+          choice.type,
+          maxSlots: choice.limit,
+        );
+    if (success) _selection = SongSelection();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? '已分配到 ${choice.radio}，可撤销此次批量操作。'
+              : '分配未完成：容量或项目状态已变化，未部分写入。',
+        ),
+      ),
+    );
+  }
+
   bool _matches(PlaylistState s, PoolTrack t) {
     final q = s.search.trim().toLowerCase();
     if (q.isEmpty) return true;
@@ -58,6 +255,14 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     int maxSlots,
     List<TrackRef> originalTracks,
   ) async {
+    if (data.originRadioCode == radio.code &&
+        data.originPlaylistType == playlistType &&
+        isCustom) {
+      ref
+          .read(playlistProvider.notifier)
+          .reorder(data.track.source, '', radio.code, playlistType);
+      return;
+    }
     bool assignTrack() {
       final assigned = ref
           .read(playlistProvider.notifier)
@@ -446,8 +651,92 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   }
 
   Future<void> _preparePackageFromUi(BuildContext context) async {
+    final plan = editableAssignmentPlan(ref);
+    final timings = ref.read(trackTimingProvider);
+    final pool = ref.read(playlistProvider).pool;
+    final incomplete = plan.assignments.values
+        .where(
+          (a) =>
+              a.isAssigned &&
+              timings[TrackTimingConfig.keyForPath(a.source)]?.allConfirmed !=
+                  true,
+        )
+        .toList();
+    if (incomplete.isNotEmpty) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: context.rm.panel,
+          title: Text(
+            '还有歌曲未完成配置',
+            style: RmText.modalH2(color: context.rm.warn),
+          ),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '分配可以保留；完成以下歌曲的 6 个节点并保存后，才能构建准备包。',
+                    style: RmText.sans(12, color: context.rm.fg2),
+                  ),
+                  const SizedBox(height: 10),
+                  for (final source in incomplete.map((a) => a.source).toSet())
+                    Builder(
+                      builder: (context) {
+                        final track = pool
+                            .where(
+                              (t) =>
+                                  TrackTimingConfig.keyForPath(t.source) ==
+                                  TrackTimingConfig.keyForPath(source),
+                            )
+                            .firstOrNull;
+                        final radios = incomplete
+                            .where((a) => a.source == source)
+                            .map((a) => a.radioCode)
+                            .toSet()
+                            .join(' / ');
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            track?.title ?? source,
+                            maxLines: 2,
+                            style: RmText.sans(12, color: context.rm.fg),
+                          ),
+                          subtitle: Text(
+                            '$radios · 未完成',
+                            style: RmText.sans(11, color: context.rm.warn),
+                          ),
+                          trailing: track == null
+                              ? null
+                              : RmButton(
+                                  label: '配置',
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _openTrackEditor(track);
+                                  },
+                                ),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            RmButton(label: '返回播放列表', onPressed: () => Navigator.pop(context)),
+          ],
+        ),
+      );
+      return;
+    }
     final cli = ref.read(studioProvider.notifier);
     final preview = cli.buildPackageLoudnessPreview();
+    final buildPlan = ref.read(effectivePlaylistPlanProvider);
+    var buildQuality = 50;
     final loudnessOffsetLu = await showPackageLoudnessDialog(
       context,
       referenceMedianLufs: preview.referenceMedianLufs,
@@ -457,18 +746,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       previewTitle: preview.previewTitle,
       previewArtist: preview.previewArtist,
       currentPackageOffsetLu: preview.currentPackageOffsetLu,
+      sizeEstimate: cli.estimatePackageSizes(buildPlan),
+      onQualityChanged: (quality) => buildQuality = quality,
     );
     if (loudnessOffsetLu == null) return;
     if (!mounted) return;
     if (!context.mounted) return;
     final built = await cli.buildPackage(
       loudnessOffsetLu: loudnessOffsetLu,
-      plan: ref.read(effectivePlaylistPlanProvider),
+      quality: buildQuality,
+      plan: buildPlan,
     );
     if (!mounted) return;
     if (!context.mounted) return;
     final latest = ref.read(studioProvider);
     if (built) {
+      ref.read(playlistPlanProvider.notifier).save();
       final summary = latest.lastPackageSummary;
       await showPackageBuildSuccessDialog(
         context,
@@ -530,61 +823,95 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(playlistProvider);
+    final project = ref.watch(studioProvider.select((s) => s.projectDir));
+    if (_selectionProject != project) {
+      _selectionProject = project;
+      _selection = SongSelection();
+      _selecting = false;
+    }
+    _selection.ids.removeWhere((id) => !s.pool.any((t) => t.id == id));
+
+    if (_search.text != s.search) {
+      _search.value = TextEditingValue(
+        text: s.search,
+        selection: TextSelection.collapsed(offset: s.search.length),
+      );
+    }
     final cli = ref.watch(studioProvider);
     final view = ref.watch(playlistCatalogViewProvider);
     final catalog = ref.watch(playlistCatalogProvider);
     final baselineCatalog = ref.watch(baselinePlaylistCatalogProvider);
     final plan = ref.watch(effectivePlaylistPlanProvider);
     final poolPlan = _poolAssignmentPlan(catalog, plan, s.pool);
-    final editingPlan = plan.hasDraft ? plan : poolPlan;
-    final pool = s
-        .poolForDisplay(editingPlan)
-        .where((t) => _matches(s, t))
-        .toList();
+    final editingPlan =
+        ref.read(playlistPlanProvider.notifier).hasUserPlan || plan.hasDraft
+        ? plan
+        : poolPlan;
+    final displayInputs = (s.pool, editingPlan, s.search);
+    if (_displayPoolInputs != displayInputs) {
+      _displayPoolInputs = displayInputs;
+      _cachedDisplayPool = s
+          .poolForDisplay(editingPlan)
+          .where((t) => _matches(s, t))
+          .toList();
+    }
+    final pool = _cachedDisplayPool;
 
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: _playlistPageMaxWidth),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(40, 36, 40, 32),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _pageHead(context, cli, view),
-              if (cli.projectEditingLocked) ...[
-                const SizedBox(height: 12),
-                RmBanner(
-                  kind: RmBannerKind.warn,
-                  title: cli.projectEditingLockTitle,
-                  body:
-                      '${cli.projectEditingLockMessage} 播放列表拖拽、恢复、复制和写包暂时不可用。',
+    return ContainedScroll(
+      controller: _boardScroll,
+      child: Center(
+        child: Consumer(
+          builder: (context, layoutRef, child) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: layoutRef.watch(
+                layoutOptionsProvider.select(
+                  (o) => o.pageWidth(_playlistPageMaxWidth),
                 ),
-              ],
-              const SizedBox(height: 18),
-              if (catalog.failed)
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: _catalogError(context, catalog, cli, view),
+              ),
+            ),
+            child: child,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(40, 24, 40, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _pageHead(context, cli, view),
+                if (cli.projectEditingLocked) ...[
+                  const SizedBox(height: 12),
+                  RmBanner(
+                    kind: RmBannerKind.warn,
+                    title: cli.projectEditingLockTitle,
+                    body:
+                        '${cli.projectEditingLockMessage} 播放列表拖拽、恢复、复制和写包暂时不可用。',
                   ),
-                )
-              else ...[
-                _toolbar(context, s, catalog, view, editingPlan, cli),
+                ],
                 const SizedBox(height: 18),
-                Expanded(
-                  child: _board(
-                    context,
-                    s,
-                    pool,
-                    catalog,
-                    baselineCatalog,
-                    editingPlan,
-                    editingPlan,
-                    view,
-                    cli,
+                if (catalog.failed)
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: _catalogError(context, catalog, cli, view),
+                    ),
+                  )
+                else ...[
+                  _toolbar(context, s, catalog, view, editingPlan, cli),
+                  const SizedBox(height: 18),
+                  Expanded(
+                    child: _board(
+                      context,
+                      s,
+                      pool,
+                      catalog,
+                      baselineCatalog,
+                      editingPlan,
+                      editingPlan,
+                      view,
+                      cli,
+                    ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -597,38 +924,88 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     PlaylistCatalogView view,
   ) {
     final rm = context.rm;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    const description =
+        '在“游戏内”查看当前 RadioInfo，只读确认 custom / builtin；在“准备包”编辑下一次要生成的排布。';
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('播放列表', style: RmText.pageH1(color: rm.fg)),
-              const SizedBox(height: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 620),
-                child: Text(
-                  '在“游戏内”查看当前 RadioInfo，只读确认 custom / builtin；在“准备包”编辑下一次要生成的排布。',
-                  style: RmText.body(color: rm.fg3),
-                ),
-              ),
-            ],
+        Text(
+          '播放列表',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: RmText.pageH1(color: rm.fg),
+        ),
+        const SizedBox(height: 6),
+        Tooltip(
+          message: description,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Text(
+              description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: RmText.body(color: rm.fg3),
+            ),
           ),
         ),
-        if (view == PlaylistCatalogView.package)
-          RmButton(
-            onPressed: cli.busy || cli.projectEditingLocked
-                ? null
-                : () => unawaited(_preparePackageFromUi(context)),
-            variant: RmButtonVariant.primary,
-            leading: const RmIcon('music', size: 12),
-            label: '构建准备包',
-            tooltip: cli.projectEditingLocked
-                ? cli.projectEditingLockMessage
-                : null,
-          ),
       ],
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        RmButton(
+          label: ref.watch(playlistPlanProvider.notifier).dirty
+              ? '保存播放列表 *'
+              : '保存播放列表',
+          leading: const RmIcon('check', size: 12),
+          onPressed: cli.busy || cli.projectEditingLocked
+              ? null
+              : () {
+                  ref.read(playlistPlanProvider.notifier).save();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('歌曲分配与顺序已保存，无需构建准备包。')),
+                  );
+                },
+        ),
+        RmButton(
+          onPressed: cli.busy || cli.projectEditingLocked
+              ? null
+              : () => unawaited(_preparePackageFromUi(context)),
+          variant: RmButtonVariant.primary,
+          leading: const RmIcon('music', size: 12),
+          label: '构建准备包',
+          tooltip: cli.projectEditingLocked
+              ? cli.projectEditingLockMessage
+              : null,
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, c) {
+        if (c.maxWidth >= 780) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(child: heading),
+              if (view == PlaylistCatalogView.package) ...[
+                const SizedBox(width: 16),
+                actions,
+              ],
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            heading,
+            if (view == PlaylistCatalogView.package) ...[
+              const SizedBox(height: 12),
+              Align(alignment: Alignment.centerLeft, child: actions),
+            ],
+          ],
+        );
+      },
     );
   }
 
@@ -650,7 +1027,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         borderRadius: BorderRadius.circular(RmTokens.rLg),
       ),
       child: LayoutBuilder(
-        builder: (context, _) {
+        builder: (context, constraints) {
           final viewSwitch = _PlaylistViewSwitch(
             value: view,
             onChanged: (value) {
@@ -688,19 +1065,34 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
             ),
           );
           final search = SizedBox(
-            width: 280,
+            width: (constraints.maxWidth - 260).clamp(
+              0.0,
+              constraints.maxWidth,
+            ),
             child: TextField(
+              key: const ValueKey('playlist-search'),
+              controller: _search,
               onChanged: ref.read(playlistProvider.notifier).setSearch,
               style: RmText.sans(12.5, color: rm.fg),
               decoration: InputDecoration(
                 isDense: true,
-                hintText: '搜索曲目 / 艺术家',
+                hintText: '搜索歌曲 / 歌手 / 文件名',
                 hintStyle: RmText.sans(12.5, color: rm.fg4),
                 prefixIcon: Padding(
                   padding: const EdgeInsets.only(left: 10, right: 8),
                   child: RmIcon('search', size: 13, color: rm.fg3),
                 ),
                 prefixIconConstraints: const BoxConstraints(minWidth: 30),
+                suffixIcon: s.search.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清空搜索',
+                        icon: Icon(Icons.close, size: 14, color: rm.fg3),
+                        onPressed: () {
+                          _search.clear();
+                          ref.read(playlistProvider.notifier).setSearch('');
+                        },
+                      ),
                 filled: true,
                 fillColor: rm.raised,
                 contentPadding: const EdgeInsets.symmetric(
@@ -749,20 +1141,51 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 spacing: 10,
                 runSpacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
-                children: [viewSwitch, baseChip, ?copyAction],
+                children: [
+                  viewSwitch,
+                  baseChip,
+                  ?copyAction,
+                  if (view == PlaylistCatalogView.package) ...[
+                    RmButton(
+                      key: const ValueKey('playlist-undo'),
+                      size: RmButtonSize.sm,
+                      label: '撤销',
+                      leading: const RmIcon('undo', size: 12),
+                      onPressed:
+                          editingLocked ||
+                              !ref.read(playlistPlanProvider.notifier).canUndo
+                          ? null
+                          : ref.read(playlistPlanProvider.notifier).undo,
+                    ),
+                    RmButton(
+                      key: const ValueKey('playlist-redo'),
+                      size: RmButtonSize.sm,
+                      label: '重做',
+                      leading: const Icon(Icons.redo, size: 12),
+                      onPressed:
+                          editingLocked ||
+                              !ref.read(playlistPlanProvider.notifier).canRedo
+                          ? null
+                          : ref.read(playlistPlanProvider.notifier).redo,
+                    ),
+                  ],
+                  splitSwitch,
+                  if (s.splitPlaylistTypes) segmented,
+                  Text('双击自建曲目进入编辑', style: RmText.sans(11.5, color: rm.fg3)),
+                ],
               ),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 10,
                 runSpacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  splitSwitch,
-                  if (s.splitPlaylistTypes) segmented,
-                  search,
-                  customChip,
-                  builtinChip,
-                ],
+                children: [search, customChip, builtinChip],
+              ),
+              PlaylistLayoutControls(
+                availableRadioWidth: LayoutOptions.radioWidthFor(
+                  constraints.maxWidth + 30,
+                  withPool: view == PlaylistCatalogView.package,
+                ),
               ),
             ],
           );
@@ -824,13 +1247,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     PlaylistPlan plan,
     List<PoolTrack> pool,
   ) {
-    if (plan.hasDraft || catalog.failed) return plan;
-    final detected = playlistPlanFromCatalog(
-      catalog,
-      pool,
-      includeBuiltinTargets: false,
-    );
-    return detected.assignments.isEmpty ? plan : detected;
+    if (ref.read(playlistPlanProvider.notifier).hasUserPlan ||
+        plan.hasDraft ||
+        catalog.failed) {
+      return plan;
+    }
+    final inputs = (catalog, plan, pool);
+    if (_poolPlanInputs != inputs) {
+      _poolPlanInputs = inputs;
+      final detected = playlistPlanFromCatalog(
+        catalog,
+        pool,
+        includeBuiltinTargets: false,
+      );
+      _cachedPoolPlan = detected.assignments.isEmpty ? plan : detected;
+    }
+    return _cachedPoolPlan!;
   }
 
   Widget _board(
@@ -846,71 +1278,24 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   ) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const gap = 12.0;
-
-        if (view != PlaylistCatalogView.package) {
+        const gap = LayoutOptions.gap;
+        final showPool = view == PlaylistCatalogView.package;
+        final poolWidth = LayoutOptions.poolWidthFor(constraints.maxWidth);
+        final available = LayoutOptions.radioWidthFor(
+          constraints.maxWidth,
+          withPool: showPool,
+        );
+        if (showPool &&
+            constraints.maxWidth < LayoutOptions.minColumnWidth + gap + 160) {
+          // If one radio and the pool cannot fit side by side, stack them rather
+          // than violate either column's minimum width or add horizontal overflow.
           return SingleChildScrollView(
-            child: _radioBoard(
-              context,
-              s,
-              catalog,
-              baselineCatalog,
-              plan,
-              view,
-              cli,
-            ),
-          );
-        }
-
-        final poolPanelWidth = constraints.maxWidth >= 1120
-            ? 280.0
-            : (constraints.maxWidth >= 780 ? 260.0 : 220.0);
-
-        if (constraints.maxWidth < 780) {
-          final radioBoardWidth = (constraints.maxWidth - poolPanelWidth - gap)
-              .clamp(0.0, double.infinity)
-              .toDouble();
-          final radioCanvasWidth = radioBoardWidth < 640
-              ? 640.0
-              : radioBoardWidth;
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(
-                    width: radioCanvasWidth,
-                    child: SingleChildScrollView(
-                      child: _radioBoard(
-                        context,
-                        s,
-                        catalog,
-                        baselineCatalog,
-                        plan,
-                        view,
-                        cli,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: gap),
-              SizedBox(
-                key: const ValueKey('playlist-pool-side-panel'),
-                width: poolPanelWidth,
-                child: _poolColumn(context, s, pool, catalog, poolPlan, cli),
-              ),
-            ],
-          );
-        }
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                child: _radioBoard(
+            controller: _boardScroll,
+            primary: false,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _radioBoard(
                   context,
                   s,
                   catalog,
@@ -918,13 +1303,42 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   plan,
                   view,
                   cli,
+                  viewportHeight: constraints.maxHeight,
                 ),
-              ),
+                const SizedBox(height: gap),
+                SizedBox(
+                  key: const ValueKey('playlist-pool-side-panel'),
+                  height: 480,
+                  child: _poolColumn(context, s, pool, catalog, poolPlan, cli),
+                ),
+              ],
             ),
+          );
+        }
+        final canvasWidth = available;
+        final board = SizedBox(
+          width: canvasWidth,
+          height: constraints.maxHeight,
+          child: _radioBoard(
+            context,
+            s,
+            catalog,
+            baselineCatalog,
+            plan,
+            view,
+            cli,
+            viewportHeight: constraints.maxHeight,
+          ),
+        );
+        if (!showPool) return board;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: board),
             const SizedBox(width: gap),
             SizedBox(
               key: const ValueKey('playlist-pool-side-panel'),
-              width: poolPanelWidth,
+              width: poolWidth,
               child: _poolColumn(context, s, pool, catalog, poolPlan, cli),
             ),
           ],
@@ -940,39 +1354,99 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     PlaylistCatalog? baselineCatalog,
     PlaylistPlan plan,
     PlaylistCatalogView view,
-    StudioState cli,
-  ) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        const gap = 12.0;
-        const minColumnWidth = 205.0;
-        const columnHeight = 480.0;
-        final columns = (constraints.maxWidth + gap) ~/ (minColumnWidth + gap);
-        final columnCount = columns.clamp(1, 5);
-        final columnWidth =
-            (constraints.maxWidth - gap * (columnCount - 1)) / columnCount;
-        return Wrap(
-          key: const ValueKey('playlist-radio-board'),
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final r in catalog.radios)
-              SizedBox(
-                key: ValueKey('playlist-radio-column-${r.code}'),
-                width: columnWidth,
-                height: columnHeight,
-                child: _radioColumn(
-                  context,
-                  s,
-                  r,
-                  catalog,
-                  baselineCatalog,
-                  plan,
-                  view,
-                  cli,
+    StudioState cli, {
+    required double viewportHeight,
+  }) {
+    // Station contents depend on songs/filter/plan, not on slider position.
+    final inputs = (
+      s,
+      catalog,
+      baselineCatalog,
+      plan,
+      view,
+      cli.projectEditingLocked,
+      ref.watch(editorOptionsProvider).expansionEnabled,
+      ref.read(playlistPlanProvider.notifier).hasUserPlan,
+      context.rm,
+    );
+    if (_radioWidgetInputs != inputs) {
+      _radioWidgetInputs = inputs;
+      _cachedRadioWidgets = [
+        for (final radio in catalog.radios)
+          _radioColumn(
+            context,
+            s,
+            radio,
+            catalog,
+            baselineCatalog,
+            plan,
+            view,
+            cli,
+          ),
+      ];
+    }
+    final columns = _cachedRadioWidgets;
+    return Consumer(
+      builder: (context, layoutRef, _) {
+        final options = layoutRef.watch(layoutOptionsProvider);
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            const gap = 12.0;
+            final count = options.columnsFor(constraints.maxWidth);
+            final height = options.heightFor(
+              viewportHeight,
+              catalog.radios.length,
+              count,
+            );
+            final width = (constraints.maxWidth - gap * (count - 1)) / count;
+            if (constraints.hasBoundedHeight) {
+              _rowExtent = height + gap;
+              return NotificationListener<ScrollNotification>(
+                onNotification: _snapOnScroll,
+                child: GridView.builder(
+                  key: const ValueKey('playlist-radio-board'),
+                  controller: _boardScroll,
+                  primary: false,
+                  padding: EdgeInsets.zero,
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(40),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: count,
+                    mainAxisSpacing: gap,
+                    crossAxisSpacing: gap,
+                    mainAxisExtent: height,
+                  ),
+                  itemCount: columns.length,
+                  itemBuilder: (context, i) => _KeepStationState(
+                    key: ValueKey('station-${catalog.radios[i].code}'),
+                    child: SizedBox(
+                      key: ValueKey(
+                        'playlist-radio-column-${catalog.radios[i].code}',
+                      ),
+                      width: width,
+                      height: height,
+                      child: columns[i],
+                    ),
+                  ),
                 ),
-              ),
-          ],
+              );
+            }
+            return Wrap(
+              key: const ValueKey('playlist-radio-board'),
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (var i = 0; i < columns.length; i++)
+                  SizedBox(
+                    key: ValueKey(
+                      'playlist-radio-column-${catalog.radios[i].code}',
+                    ),
+                    width: width,
+                    height: height,
+                    child: columns[i],
+                  ),
+              ],
+            );
+          },
         );
       },
     );
@@ -996,7 +1470,10 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     final draftCustom =
         !readOnly &&
         !draftBuiltin &&
-        plan.hasAssignmentsForRadio(r.code, playlistType);
+        (plan.hasAssignmentsForRadio(r.code, playlistType) ||
+            (ref.read(playlistPlanProvider.notifier).hasUserPlan &&
+                catalog.modeOfList(r.code, playlistType) ==
+                    StationMode.custom));
     final catalogCustom =
         catalog.modeOfList(r.code, playlistType) == StationMode.custom;
     final isCustom = readOnly
@@ -1007,10 +1484,6 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     final originalCatalog = draftBuiltin
         ? (baselineCatalog ?? catalog)
         : catalog;
-    final baselineTrackRefs = baselineCatalog?.tracksOfRadio(
-      r.code,
-      playlistType,
-    );
     final originalTrackRefs = originalCatalog.tracksOfRadio(
       r.code,
       playlistType,
@@ -1022,58 +1495,106 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     final count = isCustom && (customTracks.isNotEmpty || draftCustom)
         ? customTracks.length
         : originalTrackCount;
-    final replaceableCapacity = baselineTrackRefs?.length ?? r.slot;
+    final expansion = ref.watch(editorOptionsProvider).expansionEnabled;
+    final originalCapacity =
+        baselineCatalog?.tracksOfRadio(r.code, playlistType).length ?? 0;
+    final replaceableCapacity = expansion
+        ? 4096
+        : (originalCapacity > 0 ? originalCapacity : r.slot);
     final capacity = isCustom ? replaceableCapacity : originalTrackCount;
 
+    final bySource = {
+      for (final t in s.pool) PlaylistAssignment.keyForPath(t.source): t,
+    };
+    PoolTrack? localTrack(TrackRef track) {
+      final source = originalCatalog.sourceForTrack(track);
+      return source == null
+          ? null
+          : bySource[PlaylistAssignment.keyForPath(source)];
+    }
+
     Widget buildColumn() {
-      final children = <Widget>[];
-      if (isCustom) {
-        if (!readOnly && (customTracks.isNotEmpty || draftCustom)) {
-          for (final t in assignedTracks) {
-            children.add(
-              _draggableTrack(
+      final editableCustom =
+          isCustom && !readOnly && (customTracks.isNotEmpty || draftCustom);
+      Widget item(BuildContext context, int index) {
+        if (editableCustom) {
+          final t = assignedTracks[index];
+          return DragTarget<_PlaylistDragData>(
+            onWillAcceptWithDetails: (details) =>
+                details.data.originRadioCode == r.code &&
+                details.data.originPlaylistType == playlistType,
+            onAcceptWithDetails: (details) => ref
+                .read(playlistProvider.notifier)
+                .reorder(
+                  details.data.track.source,
+                  t.source,
+                  r.code,
+                  playlistType,
+                ),
+            builder: (context, candidates, rejected) => Container(
+              decoration: BoxDecoration(
+                border: candidates.isEmpty
+                    ? null
+                    : Border(
+                        top: BorderSide(
+                          color: context.rm.accent.base,
+                          width: 3,
+                        ),
+                      ),
+              ),
+              child: _draggableTrack(
                 t,
                 originRadioCode: r.code,
                 originPlaylistType: playlistType,
                 locked: editingLocked,
+                order: customTracks.indexOf(t) + 1,
+                editorSequence: assignedTracks,
               ),
-            );
-          }
-        } else {
-          for (final t in originalTracks) {
-            children.add(
-              TrackCard(
-                title: t.title,
-                artist: t.artist,
-                durationSec: t.durationSec,
-                locked: readOnly,
-                custom: t.modded || readOnly,
-              ),
-            );
-          }
-        }
-      } else {
-        for (final t in originalTracks) {
-          children.add(
-            TrackCard(
-              title: t.title,
-              artist: t.artist,
-              durationSec: t.durationSec,
-              locked: true,
-              custom: t.modded,
             ),
           );
         }
+        final t = originalTracks[index];
+        final local = isCustom ? localTrack(t) : null;
+        return TrackCard(
+          notConfiguredProgress: local != null && !local.configured
+              ? '${local.confirmed}/4'
+              : null,
+          order: originalTrackRefs.indexOf(t) + 1,
+          title: t.title,
+          artist: t.artist,
+          durationSec: t.durationSec,
+          locked: !isCustom || readOnly,
+          custom: isCustom ? (t.modded || readOnly) : t.modded,
+          onOpenEditor: editingLocked
+              ? null
+              : _catalogEditorAction(t, catalog, s.pool, originalTracks),
+        );
       }
-      return PlaylistColumn.radio(
+
+      return PlaylistColumn.radioBuilder(
         radio: r,
         isCustom: isCustom,
         count: count,
+        pendingCount: !isCustom
+            ? 0
+            : editableCustom
+            ? customTracks.where((t) => !t.configured).length
+            : originalTrackRefs
+                  .map(localTrack)
+                  .whereType<PoolTrack>()
+                  .where((t) => !t.configured)
+                  .length,
         capacity: capacity,
+        originalCount: baselineCatalog == null
+            ? r.slot
+            : baselineCatalog.tracksOfRadio(r.code, playlistType).length,
         onRestoreBuiltin: !readOnly && !editingLocked && isCustom
             ? () => unawaited(_restoreBuiltin(r, playlistType, customTracks))
             : null,
-        children: children,
+        itemCount: editableCustom
+            ? assignedTracks.length
+            : originalTracks.length,
+        itemBuilder: item,
       );
     }
 
@@ -1174,10 +1695,122 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     PlaylistPlan plan,
     StudioState cli,
   ) {
+    final inputs = (
+      s,
+      pool,
+      catalog,
+      plan,
+      cli.projectEditingLocked,
+      _selecting,
+      _browse,
+      context.rm,
+    );
+    if (_poolWidgetInputs != inputs) {
+      _poolWidgetInputs = inputs;
+      _cachedPoolWidget = ValueListenableBuilder<SongSelection>(
+        valueListenable: _selectionSignal,
+        builder: (context, selection, _) =>
+            _poolColumnContent(context, s, pool, catalog, plan, cli),
+      );
+    }
+    return _cachedPoolWidget!;
+  }
+
+  Widget _poolColumnContent(
+    BuildContext context,
+    PlaylistState s,
+    List<PoolTrack> pool,
+    PlaylistCatalog catalog,
+    PlaylistPlan plan,
+    StudioState cli,
+  ) {
     final assignmentLabelsByTrackKey = _assignmentLabelsByTrackKey(plan, s);
+    pool = browseSongs(pool, _browse, duplicates: duplicateSongs(s.pool));
     final column = PlaylistColumn.poolBuilder(
       count: pool.length,
       itemCount: pool.length,
+      filterControls: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Tooltip(
+                    message: 'Ctrl 多选 · Shift 连选 · 双击编辑',
+                    child: Text(
+                      'Ctrl 多选 · Shift 连选 · 双击编辑',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: RmText.sans(10, color: context.rm.fg3),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints.tightFor(width: 84),
+                  child: RmButton(
+                    key: const ValueKey('playlist-multiselect-toggle'),
+                    size: RmButtonSize.md,
+                    label: _selecting ? '退出多选' : '多选',
+                    onPressed: cli.projectEditingLocked
+                        ? null
+                        : () => setState(() {
+                            _selecting = !_selecting;
+                            if (!_selecting) _selection = SongSelection();
+                          }),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_selecting)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    '已选 ${_selection.ids.length}',
+                    style: RmText.sans(10.5, color: context.rm.fg3),
+                  ),
+                  RmButton(
+                    size: RmButtonSize.sm,
+                    label: '全选',
+                    onPressed: () => _selection = SongSelection(
+                      ids: pool.map((t) => t.id).toSet(),
+                    ),
+                  ),
+                  RmButton(
+                    size: RmButtonSize.sm,
+                    label: '清空',
+                    onPressed: () => _selection = SongSelection(),
+                  ),
+                  RmButton(
+                    key: const ValueKey('playlist-batch-assign'),
+                    size: RmButtonSize.sm,
+                    label: '分配到电台',
+                    variant: RmButtonVariant.primary,
+                    onPressed:
+                        _selection.ids.isEmpty || cli.projectEditingLocked
+                        ? null
+                        : () => _assignSelected(pool),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 2),
+          SongBrowseControls(
+            value: _browse,
+            compact: true,
+            showSearch: false,
+            onChanged: (v) => setState(() => _browse = v),
+          ),
+        ],
+      ),
       itemBuilder: (context, index) {
         final track = pool[index];
         final trackKey = PlaylistAssignment.keyForPath(track.source);
@@ -1185,6 +1818,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           track,
           assignmentLabels: assignmentLabelsByTrackKey[trackKey] ?? const [],
           locked: cli.projectEditingLocked,
+          editorSequence: pool,
+          selected: _selection.ids.contains(track.id),
+          selectionMode: _selecting,
+          onSelect: (control, shift) =>
+              _selectPoolTrack(track, pool, control: control, range: shift),
         );
       },
     );
@@ -1264,21 +1902,72 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     return PlaylistAssignment.normalizePlaylistType(type) == 'FreeRoam' ? 0 : 1;
   }
 
+  PoolTrack? _mappedEditorSong(
+    TrackRef track,
+    PlaylistCatalog catalog,
+    List<PoolTrack> pool,
+  ) {
+    final source = catalog.sourceBySoundName[track.soundName];
+    if (source == null || source.isEmpty) return null;
+    final key = PlaylistAssignment.keyForPath(source);
+    for (final song in pool) {
+      if (PlaylistAssignment.keyForPath(song.source) == key) return song;
+    }
+    return null;
+  }
+
+  VoidCallback? _catalogEditorAction(
+    TrackRef track,
+    PlaylistCatalog catalog,
+    List<PoolTrack> pool,
+    List<TrackRef> ordered,
+  ) {
+    final song = _mappedEditorSong(track, catalog, pool);
+    if (song == null) return null;
+    return () => _openTrackEditor(
+      song,
+      sequence: [
+        for (final item in ordered)
+          if (_mappedEditorSong(item, catalog, pool)
+              case final PoolTrack mapped)
+            mapped,
+      ],
+    );
+  }
+
+  void _openTrackEditor(PoolTrack song, {List<PoolTrack>? sequence}) {
+    if (ref.read(studioProvider).projectEditingLocked) return;
+    ref
+        .read(editorSongQueueProvider.notifier)
+        .begin(
+          ref.read(studioProvider).projectDir,
+          (sequence ?? ref.read(playlistProvider).pool).map((t) => t.id),
+        );
+    unawaited(context.push<void>(RmRoutes.editor(song.id, fromPlaylist: true)));
+  }
+
   Widget _draggableTrack(
     PoolTrack t, {
     String? originRadioCode,
     String? originPlaylistType,
     List<String> assignmentLabels = const [],
     bool locked = false,
+    int? order,
+    List<PoolTrack>? editorSequence,
+    void Function(bool control, bool shift)? onSelect,
+    bool selected = false,
+    bool selectionMode = false,
   }) {
     if (locked) {
       return TrackCard.fromPoolTrack(
         t,
+        order: order,
         assignmentLabels: assignmentLabels,
         locked: true,
       );
     }
     return Draggable<_PlaylistDragData>(
+      maxSimultaneousDrags: selectionMode ? 0 : 1,
       data: _PlaylistDragData(
         track: t,
         originRadioCode: originRadioCode,
@@ -1294,15 +1983,28 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           child: TrackCard.fromPoolTrack(
             t,
             dragging: true,
+            order: order,
             assignmentLabels: assignmentLabels,
           ),
         ),
       ),
       childWhenDragging: Opacity(
         opacity: 0.35,
-        child: TrackCard.fromPoolTrack(t, assignmentLabels: assignmentLabels),
+        child: TrackCard.fromPoolTrack(
+          t,
+          order: order,
+          assignmentLabels: assignmentLabels,
+        ),
       ),
-      child: TrackCard.fromPoolTrack(t, assignmentLabels: assignmentLabels),
+      child: TrackCard.fromPoolTrack(
+        t,
+        onOpenEditor: () => _openTrackEditor(t, sequence: editorSequence),
+        onSelect: onSelect,
+        selected: selected,
+        selectionMode: selectionMode,
+        order: order,
+        assignmentLabels: assignmentLabels,
+      ),
     );
   }
 }
@@ -1544,4 +2246,23 @@ class _PlaylistDragData {
   final PoolTrack track;
   final String? originRadioCode;
   final String? originPlaylistType;
+}
+
+/// Keep each station's inner scroll offset once it has first entered the viewport.
+class _KeepStationState extends StatefulWidget {
+  const _KeepStationState({super.key, required this.child});
+  final Widget child;
+  @override
+  State<_KeepStationState> createState() => _KeepStationStateState();
+}
+
+class _KeepStationStateState extends State<_KeepStationState>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
 }

@@ -155,20 +155,21 @@ class FhRadioStudioProject {
     String? sourceLang,
     String? targetLang,
     String? aiProfile,
+    bool? syncPostLoop,
+    bool? manualOnly,
+    bool? sirenEnabled,
+    bool? expansionEnabled,
+    bool? lastBuildExpansionEnabled,
+    bool? slmEnabled,
   }) {
     ensure(projectDir);
     final manifest = File(manifestPath(projectDir));
-    Map<String, dynamic> data;
-    try {
-      final decoded = jsonDecode(manifest.readAsStringSync(encoding: utf8));
-      data = decoded is Map
-          ? decoded.map((key, value) => MapEntry('$key', value))
-          : <String, dynamic>{};
-    } on FormatException {
-      data = <String, dynamic>{};
-    } on FileSystemException {
-      data = <String, dynamic>{};
+    final decoded = jsonDecode(manifest.readAsStringSync(encoding: utf8));
+    if (decoded is! Map ||
+        (decoded['settings'] != null && decoded['settings'] is! Map)) {
+      throw const FormatException('项目配置格式无效，已保留原文件，请先恢复备份。');
     }
+    final data = decoded.map((key, value) => MapEntry('$key', value));
     final settings = data['settings'] is Map
         ? (data['settings'] as Map).map((key, value) => MapEntry('$key', value))
         : <String, dynamic>{};
@@ -178,6 +179,16 @@ class FhRadioStudioProject {
     if (sourceLang != null) settings['source_lang'] = sourceLang;
     if (targetLang != null) settings['target_lang'] = targetLang;
     if (aiProfile != null) settings['ai_profile'] = aiProfile;
+    if (syncPostLoop != null) settings['sync_post_loop'] = syncPostLoop;
+    if (manualOnly != null) settings['manual_only'] = manualOnly;
+    if (sirenEnabled != null) settings['siren_enabled'] = sirenEnabled;
+    if (expansionEnabled != null) {
+      settings['expansion_enabled'] = expansionEnabled;
+    }
+    if (lastBuildExpansionEnabled != null) {
+      settings['last_build_expansion_enabled'] = lastBuildExpansionEnabled;
+    }
+    if (slmEnabled != null) settings['seamless_loop_music'] = slmEnabled;
     data['schema'] = 2;
     data['current_project_dir'] = Directory(projectDir).absolute.path;
     data['app'] = data['app'] ?? 'FH Radio Studio';

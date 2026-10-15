@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/project_workspace.dart';
 import '../core/track_timing_config.dart';
 import 'studio_state.dart';
 
@@ -64,8 +63,7 @@ class TrackTimingController
 
 bool _projectReadsBlocked(StudioState studio) {
   if (!studio.hasProject) return false;
-  if (studio.projectPathMigrationActive) return true;
-  return FhRadioStudioProject.needsPathMigration(studio.projectDir);
+  return studio.projectPathMigrationActive;
 }
 
 final trackTimingProvider =

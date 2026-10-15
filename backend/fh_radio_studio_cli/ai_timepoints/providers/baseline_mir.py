@@ -46,6 +46,7 @@ def analyze(
     max_beats: int,
     ffmpeg: Optional[str],
     beat_evidence: Optional[Dict[str, object]] = None,
+    loop_override: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     started = perf_counter()
     data, sample_rate, decoder = read_audio_for_analysis(source, ffmpeg=ffmpeg)
@@ -83,6 +84,7 @@ def analyze(
         features,
         grid,
         beat_step,
+        loop_override=loop_override,
     )
 
     def marker_sec(name: str) -> float:
@@ -105,25 +107,33 @@ def analyze(
     candidates = {
         "td": td_candidates,
         "pd": pd_candidates,
-        "tl": _track_loop_candidates(
-            duration,
-            mono,
-            sample_rate,
-            grid,
-            beat_step,
-            markers["TrackLoopStart"],
-            markers["TrackLoopEnd"],
-            min_start=_track_loop_min_start_from_td(td_candidates, beat_step),
+        "tl": (
+            list(loop_override["tl"])
+            if loop_override is not None
+            else _track_loop_candidates(
+                duration,
+                mono,
+                sample_rate,
+                grid,
+                beat_step,
+                markers["TrackLoopStart"],
+                markers["TrackLoopEnd"],
+                min_start=_track_loop_min_start_from_td(td_candidates, beat_step),
+            )
         ),
-        "pl": _post_loop_candidates(
-            duration,
-            mono,
-            sample_rate,
-            grid,
-            beat_step,
-            markers["PostRaceLoopStart"],
-            markers["PostRaceLoopEnd"],
-            min_start=0.0,
+        "pl": (
+            list(loop_override["pl"])
+            if loop_override is not None
+            else _post_loop_candidates(
+                duration,
+                mono,
+                sample_rate,
+                grid,
+                beat_step,
+                markers["PostRaceLoopStart"],
+                markers["PostRaceLoopEnd"],
+                min_start=0.0,
+            )
         ),
     }
 
@@ -375,6 +385,7 @@ def _timing_from_candidates(
     features: Dict[str, np.ndarray],
     grid: Dict[str, object],
     beat_step: float,
+    loop_override: Optional[Dict[str, object]] = None,
 ) -> Dict[str, int]:
     fallback = _fallback_timing(int(data.shape[0]), sample_rate)
     if duration <= 0 or sample_rate <= 0:
@@ -387,26 +398,30 @@ def _timing_from_candidates(
     )
     td = float(td_candidate.get("t", fallback["TrackDrop"] / sample_rate))
     pd = float(pd_candidate.get("t", fallback["PostDrop"] / sample_rate))
-    tl_start, tl_end = _best_track_loop_time(
-        duration,
-        _mono(data),
-        sample_rate,
-        grid,
-        beat_step,
-        fallback["TrackLoopStart"] / sample_rate,
-        fallback["TrackLoopEnd"] / sample_rate,
-        min_start=_track_loop_min_start_from_td([td_candidate], beat_step),
-    )
-    pl_start, pl_end = _best_post_loop_time(
-        duration,
-        _mono(data),
-        sample_rate,
-        grid,
-        beat_step,
-        fallback["PostRaceLoopStart"] / sample_rate,
-        fallback["PostRaceLoopEnd"] / sample_rate,
-        min_start=0.0,
-    )
+    if loop_override is not None:
+        tl_start, tl_end = loop_override["tl"][0]["start"], loop_override["tl"][0]["end"]
+        pl_start, pl_end = loop_override["pl"][0]["start"], loop_override["pl"][0]["end"]
+    else:
+        tl_start, tl_end = _best_track_loop_time(
+            duration,
+            _mono(data),
+            sample_rate,
+            grid,
+            beat_step,
+            fallback["TrackLoopStart"] / sample_rate,
+            fallback["TrackLoopEnd"] / sample_rate,
+            min_start=_track_loop_min_start_from_td([td_candidate], beat_step),
+        )
+        pl_start, pl_end = _best_post_loop_time(
+            duration,
+            _mono(data),
+            sample_rate,
+            grid,
+            beat_step,
+            fallback["PostRaceLoopStart"] / sample_rate,
+            fallback["PostRaceLoopEnd"] / sample_rate,
+            min_start=0.0,
+        )
 
     def sec_to_sample(value: float) -> int:
         return int(round(clamp_time(value, duration) * sample_rate))

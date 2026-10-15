@@ -132,6 +132,14 @@ class FhRadioStudioCli {
     CliCancellationToken? cancellationToken,
     String? stdinInput,
   }) async {
+    if (args.isNotEmpty && args.first == 'baseline' && args.contains('apply')) {
+      return const CliRunResult(
+        exitCode: 2,
+        stdout: '',
+        stderr: '独立扩容版暂未开放原始备份恢复。',
+        commandLine: '',
+      );
+    }
     return _runUv(
       uvRuntime.cliRunInvocation(
         args,

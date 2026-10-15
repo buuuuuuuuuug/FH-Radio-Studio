@@ -12,45 +12,43 @@ import 'package:fh_radio_studio/theme/tokens.dart';
 import 'package:fh_radio_studio/widgets/package_build_notice_dialog.dart';
 
 void main() {
-  testWidgets(
-    'capture package build notice dialog with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+  testWidgets('capture package build notice dialog with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureNoticeDialog(
-        tester,
-        logicalSize: const Size(900, 640),
-        outputPath: p.join(
-          outDir.path,
-          'package_build_notice_dialog_regular.png',
-        ),
-      );
-      await _captureNoticeDialog(
-        tester,
-        logicalSize: const Size(900, 900),
-        outputPath: p.join(outDir.path, 'package_build_notice_dialog_full.png'),
-      );
-      await _captureMissingSourcesDialog(
-        tester,
-        logicalSize: const Size(900, 640),
-        outputPath: p.join(
-          outDir.path,
-          'missing_playlist_sources_dialog_regular.png',
-        ),
-      );
-      await _captureMissingSourcesDialog(
-        tester,
-        logicalSize: const Size(900, 900),
-        outputPath: p.join(
-          outDir.path,
-          'missing_playlist_sources_dialog_full.png',
-        ),
-      );
-    },
-    skip: Platform.environment['CAPTURE_PACKAGE_BUILD_NOTICE_DIALOG'] != '1',
-  );
+    await _captureNoticeDialog(
+      tester,
+      logicalSize: const Size(900, 640),
+      outputPath: p.join(
+        outDir.path,
+        'package_build_notice_dialog_regular.png',
+      ),
+    );
+    await _captureNoticeDialog(
+      tester,
+      logicalSize: const Size(900, 900),
+      outputPath: p.join(outDir.path, 'package_build_notice_dialog_full.png'),
+    );
+    await _captureMissingSourcesDialog(
+      tester,
+      logicalSize: const Size(900, 640),
+      outputPath: p.join(
+        outDir.path,
+        'missing_playlist_sources_dialog_regular.png',
+      ),
+    );
+    await _captureMissingSourcesDialog(
+      tester,
+      logicalSize: const Size(900, 900),
+      outputPath: p.join(
+        outDir.path,
+        'missing_playlist_sources_dialog_full.png',
+      ),
+    );
+  }, skip: Platform.environment['CAPTURE_PACKAGE_BUILD_NOTICE_DIALOG'] != '1');
 }
 
 Future<void> _captureNoticeDialog(

@@ -9,6 +9,7 @@ from typing import Dict, Iterable, Iterator, List, Optional
 
 from ..common import die, json
 from ..external_tools import find_executable
+from ..seamless_loop import analyze_seamless
 from .cache import build_cache_manifest, default_model_dir, write_install_manifest
 from .generation.ranker import (
     sort_point_candidates,
@@ -147,6 +148,16 @@ PIPELINE_STEPS: List[Dict[str, object]] = [
     },
 ]
 
+PIPELINE_STEPS.append(
+    {
+        "id": "seamless.analyze",
+        "label": "SeamlessLoopMusic 循环匹配",
+        "detail": "原生音色与响度衔接匹配，替换 TL / PL 搜索。",
+        "provider": None,
+        "optional": False,
+        "weight": 12,
+    }
+)
 _PIPELINE_STEP_BY_ID = {str(step["id"]): step for step in PIPELINE_STEPS}
 _OPTIONAL_PROVIDER_ORDER = ("beat_this", "songformer", "mert", "demucs")
 _PROVIDER_CHECK_STEP_IDS = {
@@ -371,7 +382,11 @@ def _skip_progress_step(progress: _ProgressReporter, step_id: str, status: Provi
 def build_analysis_payload(args, progress: Optional[_ProgressReporter] = None) -> Dict[str, object]:
     progress = progress or _ProgressReporter(False)
     timer = _StageTimer()
-    progress.plan(args.profile, _progress_plan_step_ids(args.profile))
+    plan = _progress_plan_step_ids(args.profile)
+    if getattr(args, "loop_engine", "original") == "seamless":
+        plan = list(plan)
+        plan.insert(plan.index("baseline_mir.analyze"), "seamless.analyze")
+    progress.plan(args.profile, plan)
 
     def _setup():
         source = Path(args.input).expanduser()
@@ -445,6 +460,19 @@ def build_analysis_payload(args, progress: Optional[_ProgressReporter] = None) -
             }
     elif beat_status is not None:
         _skip_progress_step(progress, "beat_this.analyze", beat_status)
+    seamless = None
+    if getattr(args, "loop_engine", "original") == "seamless":
+        if not getattr(args, "slm_dll", None):
+            raise ValueError("--slm-dll required for SeamlessLoopMusic")
+        with progress.stage("seamless.analyze"), timer.stage("seamless.analyze"):
+            seamless = analyze_seamless(
+                source,
+                Path(args.slm_dll),
+                ffmpeg=ffmpeg,
+                cache_dir=(
+                    Path(args.loop_cache_dir) if getattr(args, "loop_cache_dir", None) else None
+                ),
+            )
     with progress.stage("baseline_mir.analyze"), timer.stage("baseline_mir.analyze"):
         baseline = baseline_mir.analyze(
             source,
@@ -453,8 +481,13 @@ def build_analysis_payload(args, progress: Optional[_ProgressReporter] = None) -
             max_beats=args.max_beats,
             ffmpeg=ffmpeg,
             beat_evidence=beat_evidence,
+            **({"loop_override": seamless["candidates"]} if seamless is not None else {}),
         )
     candidates = baseline["candidates"]
+    if seamless is not None:
+        # AI providers continue to analyze points/structure. Native loops are
+        # not reranked or shifted by the legacy loop constraints.
+        candidates = {**candidates, "tl": [], "pl": []}
     segments = baseline["segments"]
     songformer_status = provider_statuses_by_name.get("songformer")
     songformer_result: Dict[str, object] = {
@@ -561,6 +594,8 @@ def build_analysis_payload(args, progress: Optional[_ProgressReporter] = None) -
             segments=segments,  # type: ignore[arg-type]
             td_limit=8,
         )
+    if seamless is not None:
+        candidates = {**candidates, **seamless["candidates"]}
     with progress.stage("finalize_payload"), timer.stage("finalize_payload"):
         statuses = [
             baseline["status"],
@@ -643,6 +678,7 @@ def build_analysis_payload(args, progress: Optional[_ProgressReporter] = None) -
             provider_runtime[provider_name] = runtime
     return {
         "schema_version": SCHEMA_VERSION,
+        "loop_engine": "seamless-loop-music" if seamless is not None else "original",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source": str(source.resolve()),
         "title": title,

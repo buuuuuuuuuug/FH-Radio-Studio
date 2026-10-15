@@ -8,6 +8,7 @@ from .baseline import (
 )
 from .baseline_order import is_baseline_derived_index_path
 from .common import *
+from .deployment_paths import contained_game_path, deployment_relative_path
 from .game import resolve_game_dir
 
 
@@ -176,6 +177,7 @@ def _apply_package_coverage(
     plan: Dict[str, object],
     package_md5s: Dict[str, str],
     last_applied_md5s: Optional[Dict[str, str]] = None,
+    game_dir: Optional[Path] = None,
 ) -> None:
     last_applied_md5s = last_applied_md5s or {}
     for item in list(plan.get("files", [])):
@@ -190,8 +192,23 @@ def _apply_package_coverage(
         last_applied_md5 = last_applied_md5s.get(install_rel) or last_applied_md5s.get(short_rel)
         item["package_md5"] = package_md5
         item["last_applied_package_md5"] = last_applied_md5
-        item["package_diff_status"] = _package_diff_status_for(item, package_md5)
-        item["coverage_status"] = _coverage_status_for(item, package_md5)
+        effective_md5 = item.get("md5")
+        if game_dir is not None and install_rel.startswith("media/"):
+            overlay_rel = deployment_relative_path(install_rel, "mediapc")
+            overlay = contained_game_path(game_dir, overlay_rel)
+            if overlay.is_file():
+                effective_md5 = md5_file(overlay)
+                item["effective_install_relative_path"] = overlay_rel
+                item["effective_game_path"] = str(overlay)
+        item["effective_md5"] = effective_md5
+        effective_item = {**item, "md5": effective_md5}
+        baseline_md5 = _baseline_md5_for(item)
+        if baseline_md5 and item.get("baseline_status") == "ok" and effective_md5 != baseline_md5:
+            effective_item["baseline_status"] = "backup_differs_from_current"
+        diff_status = _package_diff_status_for(effective_item, package_md5)
+        effective_item["package_diff_status"] = diff_status
+        item["package_diff_status"] = diff_status
+        item["coverage_status"] = _coverage_status_for(effective_item, package_md5)
 
 
 def _issue(label: str, path: str, detail: str, level: str) -> Dict[str, str]:
@@ -271,7 +288,7 @@ def _integrity_from_plan(
         if baseline_manifest and files:
             for item in files:
                 rel = _baseline_install_relative_path(item)
-                current_md5 = item.get("md5")
+                current_md5 = item.get("effective_md5", item.get("md5"))
                 baseline_md5 = _baseline_md5_for(item)
                 if item.get("baseline_status") == "not_backed_up":
                     add_unknown(
@@ -399,7 +416,7 @@ def _integrity_from_plan(
 
     for item in package_items:
         rel = _baseline_install_relative_path(item)
-        current_md5 = item.get("md5")
+        current_md5 = item.get("effective_md5", item.get("md5"))
         package_md5 = item.get("package_md5")
         if item.get("baseline_status") == "not_backed_up":
             add_unknown(
@@ -518,7 +535,7 @@ def verify_integrity(
         allow_missing=True,
         preferred_path=preferred_path,
     )
-    _apply_package_coverage(plan, package_md5s, last_applied_md5s)
+    _apply_package_coverage(plan, package_md5s, last_applied_md5s, game_dir=game_dir)
     return {
         "schema_version": 1,
         "kind": "file_integrity",

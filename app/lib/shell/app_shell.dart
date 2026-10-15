@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 
 import '../state/app_state.dart';
 import '../state/studio_state.dart';
-import '../tweaks/tweaks_panel.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../theme/tokens.dart';
@@ -16,6 +15,7 @@ import '../widgets/rm_chip.dart';
 import '../widgets/rm_icon.dart';
 import 'sidebar.dart';
 import 'title_bar.dart';
+import '../tweaks/tweaks_panel.dart';
 
 /// 三段式 shell：TitleBar / (Sidebar | TabsBar) / 内容区。
 class AppShell extends ConsumerWidget {
@@ -29,7 +29,6 @@ class AppShell extends ConsumerWidget {
     final location = GoRouterState.of(context).uri.toString();
     final activeId = _activeIdFor(location);
     final rm = context.rm;
-    final showTweaks = !location.startsWith('/editor');
     final cli = ref.watch(studioProvider);
     final blockForPackageBuild =
         cli.busy && _isPackageBuildLabel(cli.busyLabel);
@@ -74,7 +73,34 @@ class AppShell extends ConsumerWidget {
               ),
             ],
           ),
-          if (showTweaks) const TweaksPanel(),
+          if (!isRail && ref.watch(settingsExpandedProvider)) ...[
+            Positioned.fill(
+              top: RmTokens.titleBarHeight + RmTokens.tabsBarHeight + 8,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () =>
+                    ref.read(settingsExpandedProvider.notifier).state = false,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              top: RmTokens.titleBarHeight + RmTokens.tabsBarHeight + 8,
+              left: 16,
+              bottom: 16,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: 260,
+                  child: Material(
+                    color: rm.panel,
+                    elevation: 8,
+                    borderRadius: BorderRadius.circular(8),
+                    child: const TweaksPanel(embedded: true),
+                  ),
+                ),
+              ),
+            ),
+          ],
           if (blockForPackageBuild) _PackageBuildBlockingOverlay(cli: cli),
           if (blockForToolchainFix)
             _ToolchainFixBlockingOverlay(
@@ -97,6 +123,7 @@ class AppShell extends ConsumerWidget {
     if (location.startsWith('/siren')) return 'siren';
     if (location.startsWith('/playlist')) return 'playlist';
     if (location.startsWith('/editor')) return 'pool';
+    if (location.startsWith('/settings')) return 'settings';
     return 'dashboard';
   }
 

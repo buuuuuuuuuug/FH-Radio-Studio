@@ -35,6 +35,11 @@ class TrackMetadata {
 class TrackMetadataCache {
   const TrackMetadataCache._();
 
+  static String? _indexPath;
+  static DateTime? _indexModified;
+  static int? _indexSize;
+  static Map<String, String> _cachedIndex = const {};
+
   static String configPath(String projectDir) {
     return p.join(
       FhRadioStudioProject.metadataDir(projectDir),
@@ -109,8 +114,14 @@ class TrackMetadataCache {
   /// runtime path through this index.
   static Map<String, String> assetIndex(String projectDir) {
     final file = File(configPath(projectDir));
-    if (!file.existsSync()) return const {};
     try {
+      final stat = file.statSync();
+      if (stat.type != FileSystemEntityType.file) return const {};
+      if (_indexPath == file.path &&
+          _indexModified == stat.modified &&
+          _indexSize == stat.size) {
+        return _cachedIndex;
+      }
       final decoded = jsonDecode(file.readAsStringSync(encoding: utf8));
       if (decoded is! Map) return const {};
       final tracks = decoded['tracks'];
@@ -127,7 +138,10 @@ class TrackMetadataCache {
           continue;
         }
       }
-      return out;
+      _indexPath = file.path;
+      _indexModified = stat.modified;
+      _indexSize = stat.size;
+      return _cachedIndex = Map.unmodifiable(out);
     } on FormatException {
       return const {};
     } on FileSystemException {

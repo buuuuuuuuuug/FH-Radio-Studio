@@ -4,11 +4,21 @@ import '../core/playlist_plan.dart';
 import '../core/project_refs.dart';
 import '../domain/radio_library.dart';
 import 'studio_state.dart';
+import 'unsaved_edits.dart';
+import 'dart:io';
 
 class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
   PlaylistPlanController(this.ref) : super(const PlaylistPlan.empty()) {
     _projectDir = ref.read(studioProvider).projectDir;
     _resetDraft();
+    final edits = ref.read(unsavedEditsProvider);
+    edits.entries['playlist'] = PendingEdit(
+      label: '播放列表',
+      dirty: () => mounted && dirty,
+      save: save,
+      discard: discard,
+    );
+    ref.onDispose(() => edits.entries.remove('playlist'));
     ref.listen<String>(studioProvider.select((state) => state.projectDir), (
       _,
       next,
@@ -20,10 +30,85 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
 
   final Ref ref;
   late String _projectDir;
+  String _savedSignature = '';
+  PlaylistPlan _saved = const PlaylistPlan.empty();
+  bool hasUserPlan = false;
+  final _undo = <({PlaylistPlan plan, bool userPlan})>[];
+  final _redo = <({PlaylistPlan plan, bool userPlan})>[];
+  int _transactionDepth = 0;
+  bool get canUndo => _undo.isNotEmpty && !_editingLocked;
+  bool get canRedo => _redo.isNotEmpty && !_editingLocked;
+  ({PlaylistPlan plan, bool userPlan}) get _entry =>
+      (plan: state, userPlan: hasUserPlan);
+  void _restore(({PlaylistPlan plan, bool userPlan}) entry) {
+    hasUserPlan = entry.userPlan;
+    state = PlaylistPlan(
+      assignments: {...entry.plan.assignments},
+      builtinTargets: {...entry.plan.builtinTargets},
+    );
+  }
+
+  void undo() {
+    if (!canUndo) return;
+    _redo.add(_entry);
+    _restore(_undo.removeLast());
+  }
+
+  void redo() {
+    if (!canRedo) return;
+    _undo.add(_entry);
+    _restore(_redo.removeLast());
+  }
+
+  T transaction<T>(T Function() operation) {
+    final before = _entry;
+    _transactionDepth++;
+    try {
+      return operation();
+    } catch (_) {
+      _restore(before);
+      rethrow;
+    } finally {
+      _transactionDepth--;
+      if (_transactionDepth == 0 &&
+          (before.plan.encodeForCli() != state.encodeForCli() ||
+              before.userPlan != hasUserPlan)) {
+        _undo.add(before);
+        if (_undo.length > 100) _undo.removeAt(0);
+        _redo.clear();
+        state = PlaylistPlan(
+          assignments: {...state.assignments},
+          builtinTargets: {...state.builtinTargets},
+        );
+      }
+    }
+  }
+
+  void _apply(PlaylistPlan plan) {
+    if (_transactionDepth == 0) {
+      transaction(() => _apply(plan));
+      return;
+    }
+    hasUserPlan = true;
+    state = plan;
+  }
+
+  bool get dirty => state.encodeForCli() != _savedSignature;
 
   void _resetDraft() {
-    state = const PlaylistPlan.empty();
-    PlaylistPlanStore.delete(_projectDir);
+    _undo.clear();
+    _redo.clear();
+    hasUserPlan = File(PlaylistPlanStore.configPath(_projectDir)).existsSync();
+    try {
+      state = hasUserPlan
+          ? PlaylistPlanStore.read(_projectDir)
+          : const PlaylistPlan.empty();
+    } on ProjectRefException {
+      state = const PlaylistPlan.empty();
+      hasUserPlan = false;
+    }
+    _saved = state;
+    _savedSignature = state.encodeForCli();
   }
 
   void reload() => _resetDraft();
@@ -31,7 +116,34 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
   // 草稿是纯内存权威（不再每次写盘）；build 时由 buildPackage 经 stdin 喂给 CLI。
   void replaceWith(PlaylistPlan plan) {
     if (_editingLocked) return;
-    state = plan;
+    _apply(
+      PlaylistPlan(
+        assignments: {...plan.assignments},
+        builtinTargets: {...plan.builtinTargets},
+      ),
+    );
+  }
+
+  void save() {
+    final plan = hasUserPlan ? state : _stateSeededFromPackage();
+    PlaylistPlanStore.write(_projectDir, plan);
+    hasUserPlan = true;
+    _saved = plan;
+    _savedSignature = plan.encodeForCli();
+    state = PlaylistPlan(
+      assignments: {...plan.assignments},
+      builtinTargets: {...plan.builtinTargets},
+    );
+  }
+
+  void discard() {
+    _undo.clear();
+    _redo.clear();
+    hasUserPlan = File(PlaylistPlanStore.configPath(_projectDir)).existsSync();
+    state = PlaylistPlan(
+      assignments: {..._saved.assignments},
+      builtinTargets: {..._saved.builtinTargets},
+    );
   }
 
   void assign({
@@ -41,32 +153,40 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
     required int slot,
   }) {
     if (_editingLocked) return;
-    state = _stateSeededFromPackage().assign(
+    final next = _stateSeededFromPackage().assign(
       source: source,
       radioCode: radioCode,
       playlistType: playlistType,
       slot: slot,
       projectDir: _projectDir,
     );
+    _apply(next);
   }
 
   void unassign(String source, {String? radioCode, String? playlistType}) {
     if (_editingLocked) return;
-    state = _stateSeededFromPackage().unassign(
+    final next = _stateSeededFromPackage().unassign(
       source,
       radioCode: radioCode,
       playlistType: playlistType,
       projectDir: _projectDir,
     );
+    _apply(next);
   }
 
   void removeDeletedSource(String source) {
-    final base = state.hasDraft ? state : _stateSeededFromPackage();
+    _undo.clear();
+    _redo.clear();
+    final base = _stateSeededFromPackage();
+    hasUserPlan = true;
     state = base.unassign(source, projectDir: _projectDir);
   }
 
   void removeDeletedSources(Iterable<String> sources) {
-    final base = state.hasDraft ? state : _stateSeededFromPackage();
+    _undo.clear();
+    _redo.clear();
+    final base = _stateSeededFromPackage();
+    hasUserPlan = true;
     state = base.unassignSources(sources, projectDir: _projectDir);
   }
 
@@ -75,14 +195,15 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
     required String playlistType,
   }) {
     if (_editingLocked) return;
-    state = _stateSeededFromPackage().restoreBuiltin(
+    final next = _stateSeededFromPackage().restoreBuiltin(
       radioCode: radioCode,
       playlistType: playlistType,
     );
+    _apply(next);
   }
 
   PlaylistPlan _stateSeededFromPackage() {
-    if (state.hasDraft) return state;
+    if (hasUserPlan || state.hasDraft) return state;
     final cli = ref.read(studioProvider);
     return playlistPlanFromPackageSummaries(
       projectDir: cli.projectDir,
@@ -101,7 +222,9 @@ final playlistPlanProvider =
 
 final effectivePlaylistPlanProvider = Provider<PlaylistPlan>((ref) {
   final plan = ref.watch(playlistPlanProvider);
-  if (plan.hasDraft) return plan;
+  if (ref.read(playlistPlanProvider.notifier).hasUserPlan || plan.hasDraft) {
+    return plan;
+  }
   final cli = ref.watch(
     studioProvider.select(
       (state) => (

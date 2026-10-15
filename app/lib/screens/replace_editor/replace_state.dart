@@ -1,4 +1,6 @@
+import '../../core/playback_window.dart';
 import 'dart:async';
+import '../../state/seamless_loop_state.dart';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -11,6 +13,12 @@ import '../../domain/replacement_models.dart';
 import '../../state/audio_analysis_state.dart';
 import '../../state/custom_pool_tracks.dart';
 import '../../state/track_timing_state.dart';
+import '../../state/editor_options.dart';
+import '../../state/unsaved_edits.dart';
+import '../../state/studio_state.dart';
+import '../../core/fh_radio_studio_cli.dart';
+import '../../widgets/time_input_field.dart';
+import '../../core/waveform_service.dart';
 
 enum PlaybackMode { idle, full, pointPreview, loopPreview }
 
@@ -271,16 +279,161 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
   ReplaceEditorNotifier(
     this.ref,
     super.state,
-    this._initialConfig,
+    TrackTimingConfig? initialConfig,
     this._analysisController,
-  );
+  ) {
+    _savedState = state;
+    _edits = ref.read(unsavedEditsProvider);
+    _entry = PendingEdit(
+      label: state.track.title,
+      dirty: () =>
+          mounted &&
+          (state.dirty ||
+              TimeInputValidation.drafts.isNotEmpty ||
+              TimeInputValidation.invalid.isNotEmpty ||
+              (pendingManualDirty?.call() ?? false)),
+      save: () {
+        saveToProject();
+      },
+      discard: () {
+        discardManualDraft?.call();
+        super.state = _savedState;
+      },
+    );
+    _edits.entries['editor'] = _entry;
+  }
 
+  late final UnsavedEdits _edits;
+  late final PendingEdit _entry;
+  late ReplaceEditorState _savedState;
   final Ref ref;
-  final TrackTimingConfig? _initialConfig;
   final AudioAnalysisController _analysisController;
   final List<ReplaceEditorState> _history = [];
+  bool Function()? pendingManualDirty;
+  VoidCallback? commitManualDraft;
+  VoidCallback? discardManualDraft;
+
+  @override
+  set state(ReplaceEditorState value) {
+    final old = super.state;
+    if (syncingPostLoop &&
+        (value.tl.start != old.tl.start ||
+            value.tl.end != old.tl.end ||
+            value.tlConfirmed != old.tlConfirmed)) {
+      value = value.copyWith(
+        plManual: value.tl,
+        plIdx: value.ai.pl.length,
+        plConfirmed: value.tlConfirmed,
+      );
+    }
+    super.state = value;
+  }
+
+  // A temporary override belongs to this editor session, never the project setting.
+  bool postLoopSyncPaused = false;
+  bool get syncingPostLoop =>
+      ref.read(editorOptionsProvider).syncPostLoop && !postLoopSyncPaused;
+  void setPostLoopSyncPaused(bool paused) {
+    postLoopSyncPaused = paused;
+    if (!paused) {
+      syncPostLoopFromTrackLoop();
+    } else {
+      super.state = state.copyWith();
+    }
+  }
+
+  void syncPostLoopFromTrackLoop() {
+    if (state.pl.start == state.tl.start &&
+        state.pl.end == state.tl.end &&
+        state.plConfirmed == state.tlConfirmed) {
+      super.state = state.copyWith();
+      return;
+    }
+    applyManualLoop(
+      GroupKind.pl,
+      state.tl.start,
+      state.tl.end,
+      confirm: state.tlConfirmed,
+    );
+  }
+
+  // Saving refreshes library metadata without discarding decoded audio or drafts.
+  void refreshTrackMetadata(PoolTrack track) {
+    if (!mounted || track.source != state.track.source) return;
+    super.state = state.copyWith(track: track);
+    _savedState = _savedState.copyWith(track: track);
+  }
+
+  void editTime(GroupKind kind, FineTarget target, double seconds) {
+    if (!seconds.isFinite || seconds < 0 || seconds > state.ai.durationSec) {
+      throw const FormatException('时间必须位于歌曲范围内');
+    }
+    if (kind.isLoop) {
+      final current = kind == GroupKind.tl ? state.tl : state.pl;
+      final start = target == FineTarget.loopStart ? seconds : current.start;
+      final end = target == FineTarget.loopEnd ? seconds : current.end;
+      if (end <= start) throw const FormatException('循环结束必须晚于开始');
+      applyManualLoop(kind, start, end, confirm: false);
+    } else {
+      applyManualPoint(kind, seconds, confirm: false);
+    }
+  }
+
+  CliCancellationToken? _waveformToken;
+  Future<void> loadWaveform({bool withLoops = true}) async {
+    final studio = ref.read(studioProvider);
+    final token = _waveformToken = CliCancellationToken();
+    try {
+      final payload = await WaveformService.load(
+        project: studio.projectDir,
+        repoRoot: studio.repoRoot,
+        source: state.track.source,
+        token: token,
+      );
+      if (!mounted || token.isCancelled) return;
+      final waveform = AudioAnalysisResult.fromJson(payload);
+      state = state.copyWith(
+        ai: state.ai.copyWith(
+          durationSec: waveform.durationSec,
+          waveformPeaks: _waveformDisplayValues(waveform.waveform),
+          beats: waveform.beats.isNotEmpty
+              ? waveform.beats
+              : state.ai.beats.isNotEmpty
+              ? state.ai.beats
+              : (state.track.bpm > 0 || state.saved)
+              ? _genBeats(waveform.durationSec, state.ai.bpm)
+              : const [],
+          sourceSampleRate: waveform.sampleRate,
+          sourceSamples: waveform.samples,
+        ),
+      );
+      _savedState = _savedState.copyWith(
+        ai: _savedState.ai.copyWith(
+          durationSec: waveform.durationSec,
+          waveformPeaks: state.ai.waveformPeaks,
+          beats: state.ai.beats,
+          sourceSampleRate: waveform.sampleRate,
+          sourceSamples: waveform.samples,
+        ),
+      );
+      if (withLoops && ref.read(editorOptionsProvider).slmEnabled) {
+        await analyzeSeamless();
+      }
+    } on Object catch (error) {
+      if (mounted && !token.isCancelled) {
+        state = state.copyWith(error: '$error', analyzing: false);
+      }
+    }
+  }
 
   Future<void> analyze({bool force = false}) async {
+    if (ref.read(editorOptionsProvider).manualOnly) {
+      await loadWaveform(withLoops: false);
+      if (mounted && ref.read(editorOptionsProvider).slmEnabled) {
+        await analyzeSeamless(force: force);
+      }
+      return;
+    }
     final path = pathFromRealTrackId(state.trackId) ?? state.track.source;
     if (path.trim().isEmpty) return;
     state = state.copyWith(analyzing: true, error: null);
@@ -297,13 +450,23 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     }
 
     var nextAi = _aiFromAnalysis(result);
-    if (!force && _initialConfig != null) {
-      nextAi = _applyConfig(nextAi, _initialConfig);
-    } else if (state.dirty || state.saved) {
+    if (state.dirty || state.saved) {
+      if (ref.read(editorOptionsProvider).slmEnabled) {
+        nextAi = nextAi.copyWith(
+          tl: _nativeLoopsWithCurrent(state.tl, nextAi.tl),
+          pl: _nativeLoopsWithCurrent(state.pl, nextAi.pl),
+        );
+      }
       nextAi = _applyCurrentMarkers(nextAi, state);
     }
     state = state.copyWith(
       ai: nextAi,
+      tlIdx: ref.read(editorOptionsProvider).slmEnabled
+          ? (state.selectedManualOf(GroupKind.tl) ? nextAi.tl.length : 0)
+          : state.tlIdx,
+      plIdx: ref.read(editorOptionsProvider).slmEnabled
+          ? (state.selectedManualOf(GroupKind.pl) ? nextAi.pl.length : 0)
+          : state.plIdx,
       analyzing: false,
       dirty: force ? true : state.dirty,
       saved: force ? false : state.saved,
@@ -313,8 +476,68 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     );
   }
 
+  CliCancellationToken? _seamlessToken;
+  Future<void> analyzeSeamless({bool force = false}) async {
+    if (!ref.read(editorOptionsProvider).slmEnabled) return;
+    final studio = ref.read(studioProvider);
+    final token = _seamlessToken = CliCancellationToken();
+    state = state.copyWith(analyzing: true, error: null);
+    try {
+      final loops = await ref.read(seamlessLoopLoaderProvider)(
+        studio.repoRoot,
+        studio.projectDir,
+        state.track.source,
+        token,
+        force,
+      );
+      if (!mounted ||
+          token.isCancelled ||
+          !ref.read(editorOptionsProvider).slmEnabled) {
+        return;
+      }
+      final keep =
+          state.saved || state.dirty || state.tlConfirmed || state.plConfirmed;
+      final nextAi = state.ai.copyWith(
+        tl: keep ? _nativeLoopsWithCurrent(state.tl, loops) : loops,
+        pl: keep ? _nativeLoopsWithCurrent(state.pl, loops) : loops,
+      );
+      final next = state.copyWith(
+        ai: nextAi,
+        analyzing: false,
+        error: null,
+        tlIdx: state.selectedManualOf(GroupKind.tl) ? nextAi.tl.length : 0,
+        plIdx: state.selectedManualOf(GroupKind.pl) ? nextAi.pl.length : 0,
+      );
+      state = next;
+      if (!state.dirty) {
+        _savedState = _savedState.copyWith(
+          ai: nextAi,
+          tlIdx: next.tlIdx,
+          plIdx: next.plIdx,
+        );
+      }
+    } on Object catch (error) {
+      if (mounted && !token.isCancelled) {
+        state = state.copyWith(analyzing: false, error: '$error');
+      }
+    } finally {
+      if (mounted && identical(_seamlessToken, token)) {
+        state = state.copyWith(analyzing: false);
+      }
+    }
+  }
+
   @override
   void dispose() {
+    if (identical(_edits.entries['editor'], _entry)) {
+      _edits.entries.remove('editor');
+    }
+    if (_seamlessToken != null) {
+      unawaited(_seamlessToken!.cancel());
+    }
+    if (_waveformToken != null) {
+      unawaited(_waveformToken!.cancel());
+    }
     unawaited(_analysisController.cancel());
     super.dispose();
   }
@@ -386,7 +609,17 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
   }
 
   void setPlayhead(double t) {
-    state = state.copyWith(playhead: t);
+    final view = pagedPlaybackWindow(
+      duration: state.ai.durationSec,
+      start: state.zoomStart,
+      end: state.zoomEnd,
+      playhead: t,
+    );
+    state = state.copyWith(
+      playhead: t,
+      zoomStart: state.playing ? view.start : null,
+      zoomEnd: state.playing ? view.end : null,
+    );
   }
 
   void togglePlay() {
@@ -566,7 +799,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     }
   }
 
-  void applyManualPoint(GroupKind kind, double timeSec) {
+  void applyManualPoint(GroupKind kind, double timeSec, {bool confirm = true}) {
     if (kind.isLoop) return;
     _remember();
     final duration = state.ai.durationSec;
@@ -579,7 +812,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       GroupKind.td => state.copyWith(
         tdManual: candidate,
         tdIdx: state.ai.td.length,
-        tdConfirmed: true,
+        tdConfirmed: confirm,
         activeGroup: kind,
         dirty: true,
         saved: false,
@@ -587,7 +820,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       GroupKind.pd => state.copyWith(
         pdManual: candidate,
         pdIdx: state.ai.pd.length,
-        pdConfirmed: true,
+        pdConfirmed: confirm,
         activeGroup: kind,
         dirty: true,
         saved: false,
@@ -596,7 +829,12 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     };
   }
 
-  void applyManualLoop(GroupKind kind, double startSec, double endSec) {
+  void applyManualLoop(
+    GroupKind kind,
+    double startSec,
+    double endSec, {
+    bool confirm = true,
+  }) {
     if (!kind.isLoop) return;
     _remember();
     final duration = state.ai.durationSec;
@@ -621,7 +859,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       GroupKind.tl => state.copyWith(
         tlManual: candidate,
         tlIdx: state.ai.tl.length,
-        tlConfirmed: true,
+        tlConfirmed: confirm,
         activeGroup: kind,
         dirty: true,
         saved: false,
@@ -629,7 +867,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       GroupKind.pl => state.copyWith(
         plManual: candidate,
         plIdx: state.ai.pl.length,
-        plConfirmed: true,
+        plConfirmed: confirm,
         activeGroup: kind,
         dirty: true,
         saved: false,
@@ -638,19 +876,36 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     };
   }
 
+  void zoomByFactor(double factor) {
+    final duration = state.ai.durationSec;
+    if (duration <= 0 || !factor.isFinite || factor <= 0) return;
+    _setZoomWidth(
+      ((state.zoomEnd - state.zoomStart) * factor).clamp(
+        math.min(8.0, duration),
+        duration,
+      ),
+    );
+  }
+
   void zoomIn() {
+    final minWidth = math.min(8.0, state.ai.durationSec);
     final width = (state.zoomEnd - state.zoomStart)
-        .clamp(8, state.ai.durationSec)
+        .clamp(minWidth, state.ai.durationSec)
         .toDouble();
-    final nextWidth = (width * 0.65).clamp(8, state.ai.durationSec).toDouble();
+    final nextWidth = (width * 0.65)
+        .clamp(minWidth, state.ai.durationSec)
+        .toDouble();
     _setZoomWidth(nextWidth);
   }
 
   void zoomOut() {
+    final minWidth = math.min(8.0, state.ai.durationSec);
     final width = (state.zoomEnd - state.zoomStart)
-        .clamp(8, state.ai.durationSec)
+        .clamp(minWidth, state.ai.durationSec)
         .toDouble();
-    final nextWidth = (width * 1.55).clamp(8, state.ai.durationSec).toDouble();
+    final nextWidth = (width * 1.55)
+        .clamp(minWidth, state.ai.durationSec)
+        .toDouble();
     _setZoomWidth(nextWidth);
   }
 
@@ -675,6 +930,11 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
   }
 
   TrackTimingConfig saveToProject() {
+    TimeInputValidation.flush();
+    if (TimeInputValidation.invalid.isNotEmpty) {
+      throw const FormatException('存在无效的时间输入，请先修正');
+    }
+    commitManualDraft?.call();
     final config = TrackTimingConfig(
       source: state.track.source,
       bpm: state.ai.bpm,
@@ -684,6 +944,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     );
     ref.read(trackTimingProvider.notifier).save(config);
     state = state.copyWith(dirty: false, saved: true);
+    _savedState = state;
     return config;
   }
 
@@ -695,24 +956,50 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
 
 final replaceEditorProvider = StateNotifierProvider.autoDispose
     .family<ReplaceEditorNotifier, ReplaceEditorState, String>((ref, trackId) {
-      final realTracks = ref.watch(realPoolTracksProvider);
+      final realTracks = ref.read(realPoolTracksProvider);
       final track =
           _resolveTrack(trackId, realTracks) ??
           _fallbackTrackForRouteId(trackId);
       final config = track.id.startsWith('real:')
           ? ref.read(trackTimingProvider.notifier).configForPath(track.source)
           : null;
+      var initial = ReplaceEditorState.initial(
+        trackId: track.id,
+        track: track,
+        ai: _seedAiFromTrackMetadata(kReplacementEdit.ai, track),
+        config: config,
+      );
+      if (config == null && ref.read(editorOptionsProvider).manualOnly) {
+        final d = initial.ai.durationSec;
+        const point = PointCandidate(t: 0, score: 0, why: '待手动设置');
+        final loop = LoopCandidate(
+          start: 0,
+          end: d,
+          score: 0,
+          bars: 0,
+          why: '待手动设置',
+        );
+        initial = initial.copyWith(
+          ai: initial.ai.copyWith(
+            td: [point],
+            pd: [point],
+            tl: [loop],
+            pl: [loop],
+          ),
+        );
+      }
       final notifier = ReplaceEditorNotifier(
         ref,
-        ReplaceEditorState.initial(
-          trackId: track.id,
-          track: track,
-          ai: _seedAiFromTrackMetadata(kReplacementEdit.ai, track),
-          config: config,
-        ),
+        ref.read(editorOptionsProvider).manualOnly
+            ? initial.copyWith(analyzing: false)
+            : initial,
         config,
         ref.read(audioAnalysisProvider.notifier),
       );
+      ref.listen<List<PoolTrack>>(realPoolTracksProvider, (_, next) {
+        final track = _resolveTrack(trackId, next);
+        if (track != null) notifier.refreshTrackMetadata(track);
+      });
       return notifier;
     });
 
@@ -725,7 +1012,10 @@ AiResult _seedAiFromTrackMetadata(AiResult ai, PoolTrack track) {
       track.sampleRate != null ||
       track.channels != null ||
       track.samples != null;
-  if (duration == ai.durationSec && bpm == ai.bpm && !hasAudioMetadata) {
+  if (!track.id.startsWith('real:') &&
+      duration == ai.durationSec &&
+      bpm == ai.bpm &&
+      !hasAudioMetadata) {
     return ai;
   }
   final scale = ai.durationSec > 0 ? duration / ai.durationSec : 1.0;
@@ -737,6 +1027,9 @@ AiResult _seedAiFromTrackMetadata(AiResult ai, PoolTrack track) {
   final samples =
       track.samples ?? (duration > 0 ? (duration * sampleRate).round() : null);
   return ai.copyWith(
+    waveformPeaks: const [],
+    beats: const [],
+    segments: const [],
     durationSec: duration,
     bpm: bpm,
     td: [for (final item in ai.td) item.copyWith(t: t(item.t))],
@@ -748,11 +1041,6 @@ AiResult _seedAiFromTrackMetadata(AiResult ai, PoolTrack track) {
     pl: [
       for (final item in ai.pl)
         item.copyWith(start: t(item.start), end: t(item.end)),
-    ],
-    beats: _seedBeats(duration, bpm),
-    segments: [
-      for (final item in ai.segments)
-        Segment(start: t(item.start), end: t(item.end), label: item.label),
     ],
     sourceSampleRate: sampleRate,
     channels: channels,
@@ -806,15 +1094,6 @@ PoolTrack _fallbackTrackForRouteId(String routeTrackId) {
     confirmed: 0,
     added: '未知',
   );
-}
-
-List<double> _seedBeats(double duration, double bpm) {
-  if (duration <= 0 || bpm <= 0) return const [];
-  final step = 60 / bpm;
-  return [
-    for (var t = 0.0; t <= duration; t += step)
-      double.parse(t.toStringAsFixed(3)),
-  ];
 }
 
 AiResult _aiFromAnalysis(AudioAnalysisResult result) {
@@ -1057,4 +1336,22 @@ int _idxWithManual(int value, int aiLength, bool hasManual) {
 int _barsFor(double start, double end, double bpm) {
   final beat = bpm <= 0 ? 0.5 : 60 / bpm;
   return ((end - start) / beat / 4).round().clamp(1, 128).toInt();
+}
+
+// Keep an existing edit, but never show the same seam twice.
+List<LoopCandidate> _nativeLoopsWithCurrent(
+  LoopCandidate current,
+  List<LoopCandidate> loops,
+) {
+  final index = loops.indexWhere(
+    (loop) =>
+        (loop.start - current.start).abs() < 0.000001 &&
+        (loop.end - current.end).abs() < 0.000001,
+  );
+  if (index < 0) return [current, ...loops];
+  return [
+    loops[index],
+    for (var i = 0; i < loops.length; i++)
+      if (i != index) loops[i],
+  ];
 }

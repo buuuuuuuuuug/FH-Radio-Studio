@@ -20,53 +20,48 @@ const _projectDirKey = 'rm.studio.projectDir';
 const _repoRootKey = 'rm.studio.repoRoot';
 
 void main() {
-  testWidgets(
-    'capture dashboard checklist dialog with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      final tempRoot = Directory.systemTemp.createTempSync(
-        'fh_radio_studio_dashboard_checklist_capture_',
-      );
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-        if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
-      });
+  testWidgets('capture dashboard checklist dialog with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final tempRoot = Directory.systemTemp.createTempSync(
+      'fh_radio_studio_dashboard_checklist_capture_',
+    );
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
+    });
 
-      final projectDir = p.join(tempRoot.path, 'project');
-      final gameDir = p.join(tempRoot.path, 'game');
-      FhRadioStudioProject.ensure(projectDir);
-      FhRadioStudioProject.writeSettings(projectDir, gameDir: gameDir);
-      SharedPreferences.setMockInitialValues({
-        _projectDirKey: projectDir,
-        _repoRootKey: p.dirname(p.current),
-      });
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    final projectDir = p.join(tempRoot.path, 'project');
+    final gameDir = p.join(tempRoot.path, 'game');
+    FhRadioStudioProject.ensure(projectDir);
+    FhRadioStudioProject.writeSettings(projectDir, gameDir: gameDir);
+    SharedPreferences.setMockInitialValues({
+      _projectDirKey: projectDir,
+      _repoRootKey: p.dirname(p.current),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureDashboardChecklistDialog(
-        tester,
-        prefs: prefs,
-        projectDir: projectDir,
-        gameDir: gameDir,
-        logicalSize: const Size(1244, 900),
-        outputPath: p.join(
-          outDir.path,
-          'dashboard_checklist_dialog_regular.png',
-        ),
-      );
-      await _captureDashboardChecklistDialog(
-        tester,
-        prefs: prefs,
-        projectDir: projectDir,
-        gameDir: gameDir,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'dashboard_checklist_dialog_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_DASHBOARD_CHECKLIST_DIALOG'] != '1',
-  );
+    await _captureDashboardChecklistDialog(
+      tester,
+      prefs: prefs,
+      projectDir: projectDir,
+      gameDir: gameDir,
+      logicalSize: const Size(1244, 900),
+      outputPath: p.join(outDir.path, 'dashboard_checklist_dialog_regular.png'),
+    );
+    await _captureDashboardChecklistDialog(
+      tester,
+      prefs: prefs,
+      projectDir: projectDir,
+      gameDir: gameDir,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'dashboard_checklist_dialog_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_DASHBOARD_CHECKLIST_DIALOG'] != '1');
 }
 
 Future<void> _captureDashboardChecklistDialog(

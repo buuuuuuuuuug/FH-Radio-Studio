@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/radio_library.dart';
@@ -23,6 +24,11 @@ class TrackCard extends StatefulWidget {
     this.siren = false,
     this.assignmentLabels = const [],
     this.dragging = false,
+    this.order,
+    this.onOpenEditor,
+    this.onSelect,
+    this.selected = false,
+    this.selectionMode = false,
   });
 
   final String title;
@@ -34,13 +40,23 @@ class TrackCard extends StatefulWidget {
   final bool siren;
   final List<String> assignmentLabels;
   final bool dragging;
+  final int? order;
+  final VoidCallback? onOpenEditor;
+  final void Function(bool control, bool shift)? onSelect;
+  final bool selected;
+  final bool selectionMode;
 
   /// 工厂：从 PoolTrack 创建（自建曲目）。
   factory TrackCard.fromPoolTrack(
     PoolTrack t, {
     bool dragging = false,
+    int? order,
     bool locked = false,
     List<String> assignmentLabels = const [],
+    VoidCallback? onOpenEditor,
+    void Function(bool control, bool shift)? onSelect,
+    bool selected = false,
+    bool selectionMode = false,
   }) {
     return TrackCard(
       title: t.title,
@@ -52,6 +68,11 @@ class TrackCard extends StatefulWidget {
       siren: t.isSiren,
       assignmentLabels: assignmentLabels,
       dragging: dragging,
+      order: order,
+      onOpenEditor: onOpenEditor,
+      onSelect: onSelect,
+      selected: selected,
+      selectionMode: selectionMode,
     );
   }
 
@@ -61,6 +82,26 @@ class TrackCard extends StatefulWidget {
 
 class _TrackCardState extends State<TrackCard> {
   bool _hover = false;
+  bool _controlAtDown = false;
+  bool _shiftAtDown = false;
+  Offset? _selectionDown;
+  void _captureModifiers(PointerDownEvent event) {
+    _controlAtDown = HardwareKeyboard.instance.isControlPressed;
+    _shiftAtDown = HardwareKeyboard.instance.isShiftPressed;
+    _selectionDown = event.buttons == 1 ? event.position : null;
+  }
+
+  void _selectOnRelease(PointerUpEvent event) {
+    final down = _selectionDown;
+    _selectionDown = null;
+    if (down != null &&
+        (event.position - down).distance < 10 &&
+        (widget.selectionMode || _controlAtDown || _shiftAtDown)) {
+      _select();
+    }
+  }
+
+  void _select() => widget.onSelect?.call(_controlAtDown, _shiftAtDown);
 
   @override
   Widget build(BuildContext context) {
@@ -74,6 +115,12 @@ class _TrackCardState extends State<TrackCard> {
     if (widget.dragging) {
       bg = rm.accent.bg;
       border = rm.accent.base;
+    } else if (widget.selected) {
+      bg = rm.accent.bg;
+      border = rm.accent.base;
+    } else if (widget.custom && widget.notConfiguredProgress != null) {
+      bg = rm.warnBg;
+      border = rm.warn.withAlpha(165);
     } else if (modded) {
       bg = rm.accent.bg;
       border = rm.accent.ring;
@@ -85,69 +132,142 @@ class _TrackCardState extends State<TrackCard> {
       border = Colors.transparent;
     }
 
-    return MouseRegion(
-      cursor: locked ? SystemMouseCursors.basic : SystemMouseCursors.grab,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Opacity(
-        opacity: locked ? 0.8 : 1,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-          decoration: BoxDecoration(
-            color: bg,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.circular(RmTokens.rSm),
-          ),
-          child: Row(
-            children: [
-              RmIcon(
-                locked ? 'lock' : 'drag',
-                size: locked ? 10 : 12,
-                color: rm.fg4,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    return Listener(
+      onPointerDown: _captureModifiers,
+      onPointerUp: _selectOnRelease,
+      onPointerMove: (event) {
+        if (_selectionDown != null &&
+            (event.position - _selectionDown!).distance >= 10) {
+          _selectionDown = null;
+        }
+      },
+      onPointerCancel: (_) => _selectionDown = null,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onDoubleTap: widget.selectionMode || widget.onOpenEditor == null
+            ? null
+            : () {
+                if (!_controlAtDown && !_shiftAtDown) widget.onOpenEditor!();
+              },
+        child: Tooltip(
+          message: widget.onOpenEditor == null
+              ? (widget.custom ? '曲目当前不可编辑' : '原版曲目没有本地编辑配置')
+              : (widget.onSelect == null
+                    ? '双击进入编辑；拖动可调整排序'
+                    : '双击编辑 · Ctrl 多选 · Shift 连选'),
+          waitDuration: const Duration(milliseconds: 450),
+          child: MouseRegion(
+            cursor: locked
+                ? (widget.onOpenEditor == null
+                      ? SystemMouseCursors.basic
+                      : SystemMouseCursors.click)
+                : SystemMouseCursors.grab,
+            onEnter: (_) => setState(() => _hover = true),
+            onExit: (_) => setState(() => _hover = false),
+            child: Opacity(
+              opacity: locked ? 0.8 : 1,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                decoration: BoxDecoration(
+                  color: bg,
+                  border: Border.all(color: border),
+                  borderRadius: BorderRadius.circular(RmTokens.rSm),
+                ),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            widget.title,
+                    if (widget.selectionMode) ...[
+                      SizedBox(
+                        width: 18,
+                        height: 26,
+                        child: Icon(
+                          widget.selected
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 15,
+                          color: widget.selected ? rm.accent.base : rm.fg4,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                    ] else if (widget.order != null) ...[
+                      SizedBox(
+                        width: 18,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            RmIcon(
+                              locked ? 'lock' : 'drag',
+                              size: 9,
+                              color: rm.fg4,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              widget.order.toString().padLeft(2, '0'),
+                              style: RmText.mono(9, color: rm.fg3),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                    ] else ...[
+                      RmIcon(
+                        locked ? 'lock' : 'drag',
+                        size: locked ? 10 : 12,
+                        color: rm.fg4,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  widget.title,
+                                  style: RmText.sans(
+                                    12.5,
+                                    weight: FontWeight.w500,
+                                    color:
+                                        widget.custom &&
+                                            widget.notConfiguredProgress != null
+                                        ? rm.warn
+                                        : modded
+                                        ? rm.accent.base
+                                        : (locked ? rm.fg2 : rm.fg),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.artist,
                             style: RmText.sans(
-                              12.5,
-                              weight: FontWeight.w500,
-                              color: modded
-                                  ? rm.accent.base
-                                  : (locked ? rm.fg2 : rm.fg),
+                              11,
+                              color: locked ? rm.fg4 : rm.fg3,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        for (final badge in badges) ...[
-                          const SizedBox(width: 5),
-                          badge,
+                          if (badges.isNotEmpty) ...[
+                            const SizedBox(height: 3),
+                            Wrap(spacing: 4, runSpacing: 3, children: badges),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(width: 5),
                     Text(
-                      widget.artist,
-                      style: RmText.sans(11, color: locked ? rm.fg4 : rm.fg3),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      _short(widget.durationSec),
+                      style: RmText.mono(10.5, color: rm.fg3),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                _short(widget.durationSec),
-                style: RmText.mono(10.5, color: rm.fg3),
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -172,7 +292,7 @@ class _TrackCardState extends State<TrackCard> {
         ),
       if (widget.notConfiguredProgress != null)
         _TrackBadge(
-          label: widget.notConfiguredProgress!,
+          label: '未完成 ${widget.notConfiguredProgress!}',
           text: rm.warn,
           border: rm.warn.withAlpha(102),
           bg: rm.warnBg,
@@ -229,7 +349,14 @@ class _TrackBadge extends StatelessWidget {
             decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
           ),
           const SizedBox(width: 5),
-          Text(label, style: RmText.mono(10, color: text)),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: RmText.mono(10, color: text),
+            ),
+          ),
         ],
       ),
     );

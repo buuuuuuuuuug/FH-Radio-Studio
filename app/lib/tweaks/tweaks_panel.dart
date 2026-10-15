@@ -1,115 +1,103 @@
+import '../widgets/editor_shortcuts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../state/app_state.dart';
+import '../widgets/layout_controls.dart';
+import '../widgets/custom_accent_dialog.dart';
+import '../widgets/rm_button.dart';
 import '../state/router.dart';
+import '../state/editor_options.dart';
+import '../state/siren_import_queue_state.dart';
 import '../theme/accents.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../theme/tokens.dart';
-import '../widgets/rm_icon.dart';
 
-/// 右下角浮动可拖面板：主题 / 强调色 / 导航 / 快速跳转。
-/// 默认收起为一个圆形按钮，点击展开。
+final settingsExpandedProvider = StateProvider<bool>((ref) => false);
+
+/// 设置入口就地展开，保留原界面和编辑状态。
 class TweaksPanel extends ConsumerStatefulWidget {
-  const TweaksPanel({super.key});
+  const TweaksPanel({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   ConsumerState<TweaksPanel> createState() => _TweaksPanelState();
 }
 
 class _TweaksPanelState extends ConsumerState<TweaksPanel> {
-  Offset _offset = const Offset(24, 24); // distance from bottom-right
-
   @override
   Widget build(BuildContext context) {
-    final open = ref.watch(tweaksOpenProvider);
-    return Positioned(
-      right: _offset.dx,
-      bottom: _offset.dy,
-      child: open ? _expanded(context) : _collapsed(context),
-    );
-  }
-
-  Widget _collapsed(BuildContext context) {
     final rm = context.rm;
-    return _draggable(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => ref.read(tweaksOpenProvider.notifier).state = true,
-          borderRadius: BorderRadius.circular(999),
-          child: Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: rm.panel,
-              border: Border.all(color: rm.borderStrong),
-              boxShadow: RmTokens.popover,
-            ),
-            alignment: Alignment.center,
-            child: RmIcon('settings', size: 16, color: rm.fg2),
-          ),
+    if (widget.embedded) {
+      return Container(
+        constraints: BoxConstraints(
+          maxHeight:
+              (MediaQuery.sizeOf(context).height -
+                      (ref.watch(navStyleProvider) == NavStyle.rail
+                          ? 240
+                          : 120))
+                  .clamp(120.0, 640.0),
         ),
-      ),
-    );
-  }
-
-  Widget _expanded(BuildContext context) {
-    final rm = context.rm;
-    return _draggable(
-      child: Container(
-        width: 280,
+        margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
           color: rm.panel,
-          borderRadius: BorderRadius.circular(RmTokens.rLg),
-          border: Border.all(color: rm.borderStrong),
-          boxShadow: RmTokens.popover,
+          border: Border.all(color: rm.border),
+          borderRadius: BorderRadius.circular(RmTokens.rSm),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // header (drag handle)
-            MouseRegion(
-              cursor: SystemMouseCursors.grab,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
-                decoration: BoxDecoration(
-                  border: Border(bottom: BorderSide(color: rm.border)),
-                ),
-                child: Row(
-                  children: [
-                    RmIcon('drag', size: 12, color: rm.fg4),
-                    const SizedBox(width: 8),
-                    Text(
-                      '设置',
-                      style: RmText.sans(
-                        12,
-                        color: rm.fg2,
-                        weight: FontWeight.w600,
-                      ),
-                    ),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () =>
-                          ref.read(tweaksOpenProvider.notifier).state = false,
-                      child: RmIcon('x', size: 14, color: rm.fg3),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            _section(context, '主题', _themeSection(context)),
-            _divider(context),
-            _section(context, '强调色', _accentSection(context)),
-            _divider(context),
-            _section(context, '导航布局', _navSection(context)),
-            _divider(context),
-            _section(context, '跳转', _routeSection(context)),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _section(context, '主题', _themeSection(context)),
+              _divider(context),
+              _section(context, '强调色', _accentSection(context)),
+              _divider(context),
+              _section(context, '导航布局', _navSection(context)),
+              _divider(context),
+              _section(context, '界面宽度', const PageWidthControl()),
+              _divider(context),
+              _section(context, '人工精修窗口宽度', const ManualRefineWidthControl()),
+              _divider(context),
+              _section(context, '快捷键', const EditorShortcutsButton()),
+              _divider(context),
+              _section(context, '功能', _sirenSection(context)),
+            ],
+          ),
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      child: Center(
+        child: Container(
+          width: 720,
+          margin: const EdgeInsets.all(40),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: rm.panel,
+            border: Border.all(color: rm.border),
+            borderRadius: BorderRadius.circular(RmTokens.rLg),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('设置', style: RmText.pageH1(color: rm.fg)),
+              _section(context, '主题', _themeSection(context)),
+              _divider(context),
+              _section(context, '强调色', _accentSection(context)),
+              _divider(context),
+              _section(context, '导航布局', _navSection(context)),
+              _divider(context),
+              _section(context, '界面宽度', const PageWidthControl()),
+              _divider(context),
+              _section(context, '人工精修窗口宽度', const ManualRefineWidthControl()),
+              _divider(context),
+              _section(context, '快捷键', const EditorShortcutsButton()),
+              _divider(context),
+              _section(context, '跳转', _routeSection(context)),
+            ],
+          ),
         ),
       ),
     );
@@ -130,6 +118,41 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
           body,
         ],
       ),
+    );
+  }
+
+  Widget _sirenSection(BuildContext context) {
+    final rm = context.rm;
+    final enabled = ref.watch(editorOptionsProvider).sirenEnabled;
+    final importing = ref.watch(sirenImportQueueProvider).importing;
+    return Row(
+      children: [
+        Expanded(
+          child: Text('启用塞壬唱片', style: RmText.sans(11.5, color: rm.fg2)),
+        ),
+        Tooltip(
+          message: importing ? '导入完成后可切换' : '显示在线唱片库入口',
+          child: SizedBox(
+            width: 34,
+            height: 22,
+            child: FittedBox(
+              child: Switch(
+                value: enabled,
+                activeTrackColor: rm.accent.base,
+                activeThumbColor: rm.panel,
+                inactiveTrackColor: rm.raised,
+                inactiveThumbColor: rm.fg4,
+                trackOutlineColor: WidgetStateProperty.all(rm.border),
+                onChanged: importing
+                    ? null
+                    : (v) => ref
+                          .read(editorOptionsProvider.notifier)
+                          .update(sirenEnabled: v),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -159,12 +182,37 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
 
   Widget _accentSection(BuildContext context) {
     final accent = ref.watch(accentProvider);
-    return Row(
+    final custom = ref.watch(customAccentProvider);
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        for (final a in AppAccent.values) ...[
-          _accentSwatch(context, a, a == accent),
-          if (a != AppAccent.values.last) const SizedBox(width: 8),
-        ],
+        for (final a in AppAccent.values)
+          _accentSwatch(context, a, custom == null && a == accent),
+        RmButton(
+          size: RmButtonSize.sm,
+          label: '自选',
+          tooltip: '选择任意颜色或输入十六进制颜色',
+          leading: Icon(
+            Icons.palette_outlined,
+            size: 13,
+            color: custom ?? context.rm.fg2,
+          ),
+          onPressed: () async {
+            final color = await showDialog<Color>(
+              context: context,
+              builder: (_) => CustomAccentDialog(
+                initial:
+                    custom ??
+                    accentColors(accent, Theme.of(context).brightness).base,
+              ),
+            );
+            if (color != null && mounted) {
+              ref.read(customAccentProvider.notifier).set(color);
+            }
+          },
+        ),
       ],
     );
   }
@@ -174,7 +222,10 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
     final brightness = Theme.of(context).brightness;
     final color = accentColors(a, brightness).base;
     return GestureDetector(
-      onTap: () => ref.read(accentProvider.notifier).set(a),
+      onTap: () {
+        ref.read(customAccentProvider.notifier).set(null);
+        ref.read(accentProvider.notifier).set(a);
+      },
       child: Container(
         width: 28,
         height: 28,
@@ -217,7 +268,6 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
       ('塞壬', RmRoutes.siren),
       ('池子', RmRoutes.pool),
       ('播放列表', RmRoutes.playlist),
-      ('启动', RmRoutes.boot),
     ];
     return Wrap(
       spacing: 6,
@@ -254,20 +304,6 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _draggable({required Widget child}) {
-    return GestureDetector(
-      onPanUpdate: (d) {
-        setState(() {
-          _offset = Offset(
-            (_offset.dx - d.delta.dx).clamp(0, 4000),
-            (_offset.dy - d.delta.dy).clamp(0, 4000),
-          );
-        });
-      },
-      child: child,
     );
   }
 }

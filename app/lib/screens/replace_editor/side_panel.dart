@@ -1,3 +1,6 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../state/editor_shortcuts.dart';
+import 'editor_timecode.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/replacement_models.dart';
@@ -11,27 +14,36 @@ import '../../widgets/rm_panel.dart';
 import 'ai_pending_overlay.dart';
 import 'replace_state.dart';
 
-class EditorSidePanel extends StatelessWidget {
+class EditorSidePanel extends ConsumerWidget {
   const EditorSidePanel({
     super.key,
     required this.state,
     required this.analysis,
     required this.onAnalyze,
+    this.manualOnly = false,
+    this.seamless = false,
   });
 
   final ReplaceEditorState state;
   final AudioAnalysisState? analysis;
   final VoidCallback onAnalyze;
+  final bool manualOnly;
+  final bool seamless;
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _aiCard(context),
+        if (!manualOnly || seamless) _aiCard(context),
         const SizedBox(height: 14),
-        _shortcutsCard(context),
+        _shortcutsCard(context, ref.watch(editorShortcutsProvider)),
       ],
+    );
+    return LayoutBuilder(
+      builder: (context, c) =>
+          c.hasBoundedHeight ? SingleChildScrollView(child: content) : content,
     );
   }
 
@@ -70,14 +82,18 @@ class EditorSidePanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'AI 分析',
+                  seamless && manualOnly
+                      ? '循环分析'
+                      : seamless
+                      ? 'AI + 循环分析'
+                      : 'AI 分析',
                   style: RmText.body(weight: FontWeight.w600, color: rm.fg),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: (analysis?.hasProgress ?? false)
+                    child: !manualOnly && (analysis?.hasProgress ?? false)
                         ? _analysisSummaryTag(context, analysis!)
                         : const SizedBox.shrink(),
                   ),
@@ -87,12 +103,29 @@ class EditorSidePanel extends StatelessWidget {
                   onPressed: state.analyzing ? null : onAnalyze,
                   variant: RmButtonVariant.ghost,
                   icon: const RmIcon('refresh', size: 13),
-                  tooltip: '重新分析',
+                  tooltip: seamless ? '重新分析循环建议' : '重新分析',
                 ),
               ],
             ),
           ),
-          if (state.analyzing && (analysis?.hasProgress ?? false))
+          if (seamless && state.analyzing && manualOnly)
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                children: [
+                  LinearProgressIndicator(
+                    color: rm.accent.base,
+                    backgroundColor: rm.raised,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'SeamlessLoopMusic 正在匹配循环衔接…',
+                    style: RmText.sans(11.5, color: rm.fg3),
+                  ),
+                ],
+              ),
+            )
+          else if (state.analyzing && (analysis?.hasProgress ?? false))
             _pipelineProgress(context, analysis!)
           else
             AiPendingGate(
@@ -111,48 +144,70 @@ class EditorSidePanel extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _row(
-                      context,
-                      '全局置信度',
-                      '${(ai.confidence * 100).round()}%',
-                      valueColor: confLow ? rm.warn : rm.fg,
-                    ),
-                    _row(context, '总时长', formatTimecode(ai.durationSec)),
+                    if (!manualOnly)
+                      _row(
+                        context,
+                        '全局置信度',
+                        '${(ai.confidence * 100).round()}%',
+                        valueColor: confLow ? rm.warn : rm.fg,
+                      ),
+                    _row(context, '总时长', formatEditorTimecode(ai.durationSec)),
                     _row(
                       context,
                       '采样数 (48k)',
                       formatSamples(ai.durationSec, 48000),
                     ),
                     _row(context, 'BPM', ai.bpm.toStringAsFixed(1)),
-                    _row(context, '节拍数', '${ai.beats.length}'),
-                    _row(context, '段落识别', '${ai.segments.length}'),
+                    if (!manualOnly) _row(context, '节拍数', '${ai.beats.length}'),
+                    if (!manualOnly)
+                      _row(context, '段落识别', '${ai.segments.length}'),
                     Container(
                       height: 1,
                       color: rm.border,
                       margin: const EdgeInsets.symmetric(vertical: 8),
                     ),
+                    if (!manualOnly)
+                      _row(
+                        context,
+                        'TD top score',
+                        _scorePercent(ai.td),
+                        valueColor: rm.accent.base,
+                      ),
+                    if (!manualOnly)
+                      _row(
+                        context,
+                        'PD top score',
+                        _scorePercent(ai.pd),
+                        valueColor: rm.accent.base,
+                      ),
                     _row(
                       context,
-                      'TD top score',
-                      _scorePercent(ai.td),
+                      seamless ? 'TL 衔接匹配度' : 'TL top score',
+                      _scorePercent(
+                        seamless
+                            ? ai.tl
+                                  .where(
+                                    (v) =>
+                                        v.why.startsWith('SeamlessLoopMusic'),
+                                  )
+                                  .toList()
+                            : ai.tl,
+                      ),
                       valueColor: rm.accent.base,
                     ),
                     _row(
                       context,
-                      'PD top score',
-                      _scorePercent(ai.pd),
-                      valueColor: rm.accent.base,
-                    ),
-                    _row(
-                      context,
-                      'TL top score',
-                      _scorePercent(ai.tl),
-                      valueColor: rm.accent.base,
-                    ),
-                    _row(
-                      context,
-                      'PL top score',
-                      _scorePercent(ai.pl),
+                      seamless ? 'PL 衔接匹配度' : 'PL top score',
+                      _scorePercent(
+                        seamless
+                            ? ai.pl
+                                  .where(
+                                    (v) =>
+                                        v.why.startsWith('SeamlessLoopMusic'),
+                                  )
+                                  .toList()
+                            : ai.pl,
+                      ),
                       valueColor: rm.accent.base,
                     ),
                   ],
@@ -438,15 +493,48 @@ class EditorSidePanel extends StatelessWidget {
     return '${(score * 100).round()}%';
   }
 
-  Widget _shortcutsCard(BuildContext context) {
+  Widget _shortcutsCard(
+    BuildContext context,
+    Map<EditorAction, EditorChord> keys,
+  ) {
     final rm = context.rm;
     final items = <(String, List<String>)>[
-      ('播放 / 暂停', ['Space']),
-      ('跳到下一段', ['1', '2', '…']),
-      ('确认当前候选', ['Enter']),
-      ('前进 1 拍', ['→']),
-      ('毫秒级微调', ['Shift', '→']),
-      ('撤销', ['Ctrl', 'Z']),
+      ('播放 / 暂停', [keys[EditorAction.play]!.label]),
+      ('确认当前选点', [keys[EditorAction.confirm]!.label]),
+      (
+        '后退 / 前进 1 拍',
+        [
+          keys[EditorAction.beatBack]!.label,
+          keys[EditorAction.beatForward]!.label,
+        ],
+      ),
+      (
+        '减少 / 增加 10ms',
+        [
+          keys[EditorAction.tenBack]!.label,
+          keys[EditorAction.tenForward]!.label,
+        ],
+      ),
+      (
+        '减少 / 增加 1ms',
+        [
+          keys[EditorAction.oneBack]!.label,
+          keys[EditorAction.oneForward]!.label,
+        ],
+      ),
+      ('撤销', [keys[EditorAction.undo]!.label]),
+      ('两端同移组合键', [loopCombinationLabel(keys)]),
+      (
+        '精修：上一条 / 下一条建议',
+        [
+          keys[EditorAction.suggestionPrevious]!.label,
+          keys[EditorAction.suggestionNext]!.label,
+        ],
+      ),
+      ('精修：回到已保存配置', [keys[EditorAction.restoreSaved]!.label]),
+      ('分配至电台', [keys[EditorAction.assign]!.label]),
+      ('上一首', [keys[EditorAction.previous]!.label]),
+      ('下一首', [keys[EditorAction.next]!.label]),
     ];
     return RmPanel(
       title: '快捷键',
@@ -458,12 +546,19 @@ class EditorSidePanel extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 children: [
-                  Text(i.$1, style: RmText.sans(12, color: rm.fg2)),
-                  const Spacer(),
-                  for (final k in i.$2) ...[
-                    _kbd(context, k),
-                    if (k != i.$2.last) const SizedBox(width: 4),
-                  ],
+                  Expanded(
+                    child: Text(i.$1, style: RmText.sans(11.5, color: rm.fg2)),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    flex: 2,
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [for (final k in i.$2) _kbd(context, k)],
+                    ),
+                  ),
                 ],
               ),
             ),

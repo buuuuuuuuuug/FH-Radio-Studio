@@ -21,25 +21,28 @@ void main() {
     expect(bars.values.every((value) => value >= 0.05 && value <= 1.0), isTrue);
   });
 
-  test('WaveformBars.fromValues keeps headroom for peak-limited audio', () {
-    final bars = WaveformBars.fromValues([
-      1.0,
-      0.99,
-      0.98,
-      0.96,
-      0.48,
-      0.46,
-      0.44,
-      0.43,
-    ]);
+  test(
+    'WaveformBars.fromValues preserves linear CLI amplitudes without percentile clipping',
+    () {
+      final bars = WaveformBars.fromValues([
+        1.0,
+        0.99,
+        0.98,
+        0.96,
+        0.48,
+        0.46,
+        0.44,
+        0.43,
+      ]);
 
-    expect(bars.values.reduce((a, b) => a > b ? a : b), lessThan(0.9));
-    expect(
-      bars.values.reduce((a, b) => a > b ? a : b) -
-          bars.values.reduce((a, b) => a < b ? a : b),
-      greaterThan(0.35),
-    );
-  });
+      expect(bars.values, [1.0, 0.99, 0.98, 0.96, 0.48, 0.46, 0.44, 0.43]);
+      expect(
+        bars.values.reduce((a, b) => a > b ? a : b) -
+            bars.values.reduce((a, b) => a < b ? a : b),
+        greaterThan(0.35),
+      );
+    },
+  );
 
   testWidgets('WaveformPainter renders arbitrary CLI segment labels', (
     tester,

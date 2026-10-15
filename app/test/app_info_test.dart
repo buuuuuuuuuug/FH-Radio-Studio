@@ -37,8 +37,8 @@ void main() {
       showBuild: false,
     );
 
-    expect(devInfo.sidebarLines, ['FH Radio Studio 0.1.0-dev.7', 'build None']);
-    expect(releaseInfo.sidebarLines, ['FH Radio Studio 0.1.0-rc.1']);
+    expect(devInfo.sidebarLines, ['$appDisplayName 0.1.0-dev.7', 'build None']);
+    expect(releaseInfo.sidebarLines, ['$appDisplayName 0.1.0-rc.1']);
   });
 
   test('only release branch names hide build visibility', () {

@@ -19,35 +19,31 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _projectDirKey = 'rm.studio.projectDir';
 
 void main() {
-  testWidgets(
-    'capture package build blocking overlay',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-      });
+  testWidgets('capture package build blocking overlay', (tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
-      SharedPreferences.setMockInitialValues({_projectDirKey: 'capture'});
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    SharedPreferences.setMockInitialValues({_projectDirKey: 'capture'});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _capturePackageBuildOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1110, 354),
-        outputPath: p.join(outDir.path, 'package_build_overlay_regular.png'),
-      );
-      await _capturePackageBuildOverlay(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1110, 700),
-        outputPath: p.join(outDir.path, 'package_build_overlay_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_PACKAGE_BUILD_OVERLAY'] != '1',
-  );
+    await _capturePackageBuildOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1110, 354),
+      outputPath: p.join(outDir.path, 'package_build_overlay_regular.png'),
+    );
+    await _capturePackageBuildOverlay(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1110, 700),
+      outputPath: p.join(outDir.path, 'package_build_overlay_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_PACKAGE_BUILD_OVERLAY'] != '1');
 }
 
 Future<void> _capturePackageBuildOverlay(

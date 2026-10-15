@@ -81,12 +81,14 @@ class PoolTrack {
     this.coverUrl,
     this.coverArtPath,
     required this.added,
+    this.modifiedAt,
   });
 
   final String id;
   final String title;
   final String artist;
   final String source;
+  final DateTime? modifiedAt;
   final double durationSec;
   final int bpm;
   final String key;
@@ -134,6 +136,7 @@ class PoolTrack {
       coverUrl: coverUrl,
       coverArtPath: coverArtPath,
       added: added,
+      modifiedAt: modifiedAt,
     );
   }
 }

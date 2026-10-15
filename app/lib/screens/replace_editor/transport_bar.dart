@@ -1,3 +1,4 @@
+import 'editor_timecode.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/replacement_models.dart';
@@ -40,7 +41,7 @@ class TransportBar extends StatelessWidget {
     final ai = state.ai;
     final currentSeg = segmentAt(ai.segments, state.playhead);
     final durationText = ai.durationSec > 0
-        ? formatTimecode(ai.durationSec)
+        ? formatEditorTimecode(ai.durationSec)
         : '--:--';
 
     return Container(
@@ -51,51 +52,81 @@ class TransportBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(RmTokens.rLg),
         boxShadow: floating ? RmTokens.popover : null,
       ),
-      child: Row(
-        children: [
-          if (!compact) ...[
-            RmButton.icon(
-              onPressed: onRewind,
-              icon: const RmIcon('skip-back', size: 12),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final controls = <Widget>[
+            if (!compact) ...[
+              RmButton.icon(
+                onPressed: onRewind,
+                icon: const RmIcon('skip-back', size: 12),
+              ),
+              const SizedBox(width: 8),
+            ],
+            _playButton(context),
+            if (!compact) ...[
+              const SizedBox(width: 8),
+              RmButton.icon(
+                onPressed: onSkipFwd,
+                icon: const RmIcon('skip-fwd', size: 12),
+              ),
+            ],
+            const SizedBox(width: 12),
+            RichText(
+              text: TextSpan(
+                style: RmText.mono(13, color: rm.fg),
+                children: [
+                  TextSpan(text: formatEditorTimecode(state.playhead)),
+                  TextSpan(
+                    text: ' / $durationText',
+                    style: RmText.mono(13, color: rm.fg3),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 8),
-          ],
-          _playButton(context),
-          if (!compact) ...[
-            const SizedBox(width: 8),
-            RmButton.icon(
-              onPressed: onSkipFwd,
-              icon: const RmIcon('skip-fwd', size: 12),
-            ),
-          ],
-          const SizedBox(width: 12),
-          RichText(
-            text: TextSpan(
-              style: RmText.mono(13, color: rm.fg),
-              children: [
-                TextSpan(text: formatTimecode(state.playhead)),
-                TextSpan(
-                  text: ' / $durationText',
-                  style: RmText.mono(13, color: rm.fg3),
-                ),
-              ],
-            ),
-          ),
-          const Spacer(),
-          if (!compact) ...[
+          ];
+          final details = <Widget>[
+            if (!compact) ...[
+              Text(
+                aiPending ? '段：分析中' : '段：${currentSeg.label}',
+                style: RmText.mono(11, color: rm.fg3),
+              ),
+              const SizedBox(width: 14),
+            ],
             Text(
-              aiPending ? '段：分析中' : '段：${currentSeg.label}',
+              aiPending ? 'BPM --' : 'BPM ${ai.bpm.toStringAsFixed(1)}',
               style: RmText.mono(11, color: rm.fg3),
             ),
-            const SizedBox(width: 14),
-          ],
-          Text(
-            aiPending ? 'BPM --' : 'BPM ${ai.bpm.toStringAsFixed(1)}',
-            style: RmText.mono(11, color: rm.fg3),
-          ),
-          if (!compact) ...[const SizedBox(width: 14), _kbd(context, 'Space')],
-          if (trailing != null) ...[const SizedBox(width: 12), trailing!],
-        ],
+            if (!compact) ...[
+              const SizedBox(width: 14),
+              _kbd(context, 'Space'),
+            ],
+            if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+          ];
+          if (!compact && c.maxWidth < 800) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    ...controls.take(controls.length - 1),
+                    Flexible(child: controls.last),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Wrap(
+                    spacing: 14,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: details.where((w) => w is! SizedBox).toList(),
+                  ),
+                ),
+              ],
+            );
+          }
+          return Row(children: [...controls, const Spacer(), ...details]);
+        },
       ),
     );
   }

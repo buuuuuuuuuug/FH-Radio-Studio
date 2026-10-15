@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mmap
 import multiprocessing as mp
 import os
 import queue
@@ -17,10 +18,17 @@ from .audio import (
     marker_seconds_from_override,
     timing_override_for,
 )
+from .bank_expansion import expanded_sound_name, rebuild_expanded_bank
 from .baseline_order import is_baseline_derived_index_path, load_baseline_bank_order_names
 from .common import *
 from .external_tools import find_executable
-from .fsb5 import bank_name_from_path, parse_fsb5, rewrite_fsb5_names, splice_fsb5_into_bank
+from .fsb5 import (
+    bank_name_from_path,
+    parse_fsb5,
+    parse_fsb5_bytes,
+    rewrite_fsb5_names,
+    splice_fsb5_into_bank,
+)
 from .game import (
     audio_dir_for,
     default_radio_info,
@@ -692,7 +700,9 @@ def run_streaming(cmd: List[str]) -> int:
     return int(proc.returncode)
 
 
-def run_fsbankcl(fsbankcl: str, stage_dir: Path, out_dir: Path, quality: int) -> Path:
+def run_fsbankcl(
+    fsbankcl: str, stage_dir: Path, out_dir: Path, quality: int, *, native_metadata: bool = False
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         fsbankcl,
@@ -705,6 +715,8 @@ def run_fsbankcl(fsbankcl: str, stage_dir: Path, out_dir: Path, quality: int) ->
         "-recursive",
         str(stage_dir),
     ]
+    if native_metadata:
+        cmd.insert(1, "-write_peak_volume")
     print("Running fsbankcl:")
     print("  " + " ".join(f'"{part}"' if " " in part else part for part in cmd))
     returncode = run_streaming(cmd)
@@ -762,8 +774,12 @@ def resolve_target_bank(audio_dir: Path, radio: int, explicit_bank: Optional[str
 
 def bank_has_fsb(path: Path) -> bool:
     try:
-        parse_fsb5(path)
-    except CliError:
+        if path.stat().st_size == 0:
+            return False
+        with path.open("rb") as stream:
+            with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                parse_fsb5_bytes(data)
+    except (CliError, OSError, ValueError):
         return False
     return True
 
@@ -1687,12 +1703,20 @@ def build_radio_package_unit(
         bank_info.num_samples,
     )
 
-    if len(music_files) > bank_info.num_samples and not args.allow_truncate:
+    expanding = bool(getattr(args, "expand_slots", False))
+    if expanding and len(music_files) > FSB5_MAX_SAMPLES:
+        die(f"Expansion build currently supports at most {FSB5_MAX_SAMPLES} tracks per bank")
+    if len(music_files) > bank_info.num_samples and not args.allow_truncate and not expanding:
         die(
             f"{len(music_files)} music files were provided for R{radio}, but {target_bank.name} has "
             f"{bank_info.num_samples} slots. Use --allow-truncate to keep the first {bank_info.num_samples}."
         )
-    music_files = music_files[: bank_info.num_samples]
+    if not expanding:
+        music_files = music_files[: bank_info.num_samples]
+    else:
+        for source in music_files[bank_info.num_samples :]:
+            identity = _track_key_for_package_source(args, source) or source.name
+            target_names.append(expanded_sound_name(radio, identity))
     if not music_files:
         die(f"No music files assigned for R{radio}")
 
@@ -1716,6 +1740,17 @@ def build_radio_package_unit(
             parallel_loudness=precomputed_loudness_by_source is None,
             precomputed_loudness_by_source=precomputed_loudness_by_source,
         )
+
+    if expanding:
+        for track in prepared_tracks:
+            markers = track["markers"]
+            if int(markers.get("DJDrop", -1)) < 0:
+                markers["DJDrop"] = max(
+                    0, int(markers["TrackDrop"]) - 2 * int(track["sample_rate"])
+                )
+            for key in ("StingerStart", "DJStart"):
+                if int(markers.get(key, -1)) < 0:
+                    markers[key] = max(0, int(track["sample_length"]) - int(track["sample_rate"]))
 
     bank_name = bank_name_from_path(target_bank)
     stage_dir = stage_root / bank_name
@@ -1780,8 +1815,10 @@ def build_radio_package_unit(
             _radio_progress_step_id(radio, "rebuild_bank"),
             summary=target_bank.name,
         ):
-            fsb_path = run_fsbankcl(fsbankcl, stage_dir, fsbank_out, args.quality)
-            pack_order = detect_pack_order(fsb_path, bank_info.num_samples)
+            fsb_path = run_fsbankcl(
+                fsbankcl, stage_dir, fsbank_out, args.quality, native_metadata=expanding
+            )
+            pack_order = detect_pack_order(fsb_path, len(target_names))
             if pack_order:
                 print(
                     f"fsbank pack order detected: {pack_order[:16]}{' ...' if len(pack_order) > 16 else ''}"
@@ -1790,8 +1827,19 @@ def build_radio_package_unit(
             else:
                 print("Could not detect fsbank pack order; assuming numeric stage order.")
                 ordered_names = target_names
-            new_fsb = rewrite_fsb5_names(fsb_path.read_bytes(), ordered_names)
-            splice_stats = splice_fsb5_into_bank(target_bank, new_fsb, rebuilt_bank)
+            if expanding:
+                if pack_order is None:
+                    die("Expansion requires verified FSBank sample ordering")
+                splice_stats = rebuild_expanded_bank(
+                    target_bank,
+                    fsb_path.read_bytes(),
+                    ordered_names,
+                    bank_info.num_samples,
+                    rebuilt_bank,
+                )
+            else:
+                new_fsb = rewrite_fsb5_names(fsb_path.read_bytes(), ordered_names)
+                splice_stats = splice_fsb5_into_bank(target_bank, new_fsb, rebuilt_bank)
             print(f"Rebuilt bank: {rebuilt_bank}")
     else:
         progress.completed(
@@ -1805,8 +1853,20 @@ def build_radio_package_unit(
         "station": station.get("Name"),
         "source_bank": _project_path_for_manifest(args, target_bank),
         "target_bank_name": target_bank.name,
-        "bank_slots": bank_info.num_samples,
-        "replaceable_slots": replaceable_slots,
+        "bank_slots": len(target_names),
+        "baseline_bank_slots": bank_info.num_samples,
+        "expansion_enabled": expanding,
+        "replaceable_slots": (
+            {
+                kind: sum(
+                    kind in item["playlist_types"] and item["playlist_entry"]
+                    for item in assignments
+                )
+                for kind in PLAYLIST_TYPES
+            }
+            if expanding
+            else replaceable_slots
+        ),
         "pack_order": pack_order,
         "splice": splice_stats,
         "loudness_profile": prepared_tracks[0].get("loudness_profile") if prepared_tracks else None,
@@ -1877,7 +1937,10 @@ def preflight_build_package_from_plan(
         target_names_for_bank(station, bank_info, target_bank, args.baseline_manifest)
         playlist_caps = playlist_entry_caps(station)
         music_files = list(group["sources"])
-        if len(music_files) > bank_info.num_samples and not args.allow_truncate:
+        expanding = bool(getattr(args, "expand_slots", False))
+        if expanding and len(music_files) > FSB5_MAX_SAMPLES:
+            die(f"R{radio} exceeds the experimental {FSB5_MAX_SAMPLES}-track build limit")
+        if len(music_files) > bank_info.num_samples and not args.allow_truncate and not expanding:
             die(
                 f"{len(music_files)} music files were provided for R{radio}, but {target_bank.name} has "
                 f"{bank_info.num_samples} slots. Use --allow-truncate to keep the first {bank_info.num_samples}."
@@ -1887,7 +1950,7 @@ def preflight_build_package_from_plan(
         playlist_counts = _playlist_type_counts_for_group(group)
         for playlist_type, count in playlist_counts.items():
             cap = playlist_caps.get(playlist_type, 0) or bank_info.num_samples
-            if count > cap:
+            if count > cap and not expanding:
                 die(
                     f"{count} music files were assigned to R{radio} {playlist_type}, "
                     f"but the baseline playlist has only {cap} entries."
@@ -1907,7 +1970,7 @@ def preflight_build_package_from_plan(
                     playlist_caps.get(normalize_playlist_type(playlist_type), 0)
                     or bank_info.num_samples
                 )
-                if slot_num > cap:
+                if slot_num > cap and not expanding:
                     die(
                         f"Playlist plan assigns R{radio} {playlist_type} slot {slot_num}, "
                         f"but the baseline playlist has only {cap} entries."
@@ -2590,6 +2653,8 @@ def cmd_build_package_from_plan(
 
 
 def cmd_build_package(args: argparse.Namespace) -> int:
+    if not 1 <= args.quality <= 100:
+        die("Build quality must be between 1 and 100")
     progress = _PackageProgressReporter(bool(getattr(args, "progress_jsonl", False)))
     game_dir = resolve_game_dir(args.game_dir)
     if not getattr(args, "baseline_manifest", None):
@@ -2659,6 +2724,24 @@ def cmd_build_package(args: argparse.Namespace) -> int:
             "No music files or playlist assignments were provided. Assign at least one track in the playlist draft before building a radio package."
         )
 
+    if getattr(args, "expand_slots", False):
+        music_files = collect_music_inputs(args.music)
+        return cmd_build_package_from_plan(
+            args,
+            game_dir,
+            audio_dir,
+            radio_info,
+            root,
+            [
+                {
+                    "radio": args.radio,
+                    "sources": music_files,
+                    "playlist_types_by_source": {},
+                    "playlist_slots_by_source": {},
+                }
+            ],
+            progress=progress,
+        )
     station = find_station(root, args.radio)
     target_bank = resolve_target_bank_for_station(audio_dir, station, args.radio, args.bank)
     bank_info = parse_fsb5(target_bank)

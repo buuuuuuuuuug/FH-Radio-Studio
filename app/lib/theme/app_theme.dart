@@ -130,9 +130,10 @@ extension RmThemeAccess on BuildContext {
 ThemeData buildAppTheme({
   required Brightness brightness,
   required AppAccent accent,
+  Color? customAccent,
 }) {
   final isLight = brightness == Brightness.light;
-  final acc = accentColors(accent, brightness);
+  final acc = accentColors(accent, brightness, customColor: customAccent);
 
   final rm = isLight
       ? RmTheme(

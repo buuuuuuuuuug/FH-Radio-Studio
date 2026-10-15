@@ -171,11 +171,16 @@ def _patch_single_package_xml_tree(
         patch_existing_sample(sample, assignment)
         patched += 1
 
-    for sound_name in by_sound_name:
+    for sound_name, assignment in by_sound_name.items():
         if not any(
             sample.get("SoundName") == sound_name for sample in track_list.findall("Sample")
         ):
-            missing += 1
+            if bool(package.get("expansion_enabled", False)):
+                sample = ET.SubElement(track_list, "Sample", {"SoundName": sound_name})
+                patch_existing_sample(sample, assignment)
+                patched += 1
+            else:
+                missing += 1
 
     entries_added = 0
     entries_removed = 0

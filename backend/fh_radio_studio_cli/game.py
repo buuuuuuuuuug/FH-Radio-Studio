@@ -45,6 +45,16 @@ def game_root_for(path: Path) -> Path:
     return path
 
 
+def effective_audio_dir_for(path: Path) -> Path:
+    """Current playback view only; pristine baseline operations still use media."""
+    from .deployment_paths import contained_game_path
+
+    overlay = contained_game_path(game_root_for(path), "mediapc/audio")
+    if overlay.is_dir() and any(overlay.glob("RadioInfo_*.xml")):
+        return overlay
+    return audio_dir_for(path)
+
+
 def steam_game_version(game_dir: Path) -> Dict[str, object]:
     root = game_root_for(game_dir)
     manifest = steam_appmanifest_for(root)

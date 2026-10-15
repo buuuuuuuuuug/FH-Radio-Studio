@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:fh_radio_studio/domain/radio_library.dart';
 import 'package:fh_radio_studio/screens/playlist.dart';
 import 'package:fh_radio_studio/state/app_state.dart';
+import 'package:fh_radio_studio/state/layout_options.dart';
 import 'package:fh_radio_studio/state/custom_pool_tracks.dart';
 import 'package:fh_radio_studio/state/playlist_catalog_state.dart';
 import 'package:fh_radio_studio/theme/accents.dart';
@@ -17,6 +18,155 @@ import 'package:fh_radio_studio/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('very narrow board stacks pool without violating station width', (
+    tester,
+  ) async {
+    await _pumpPlaylist(tester, const Size(364, 1100));
+    final scope = ProviderScope.containerOf(
+      tester.element(find.byType(PlaylistScreen)),
+    );
+    scope.read(layoutOptionsProvider.notifier).setRadioColumns(6);
+    await tester.pump();
+    final first = find.byKey(const ValueKey('playlist-radio-column-R1'));
+    final pool = find.byKey(const ValueKey('playlist-pool-side-panel'));
+    expect(tester.getSize(first).width, greaterThanOrEqualTo(205));
+    expect(tester.getBottomRight(first).dx, lessThanOrEqualTo(324));
+    expect(
+      tester.getTopLeft(pool).dy,
+      greaterThan(tester.getTopLeft(first).dy),
+    );
+    expect(
+      tester
+          .widget<Slider>(find.byKey(const ValueKey('radio-columns-slider')))
+          .onChanged,
+      isNull,
+    );
+    expect(tester.getSize(find.text('播放列表')).height, lessThan(60));
+    expect(
+      tester.getTopLeft(first).dy,
+      lessThan(tester.view.physicalSize.height - 200),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'playlist search text and filtering survive leaving and returning',
+    (tester) async {
+      final visible = ValueNotifier(true);
+      addTearDown(visible.dispose);
+      await _pumpPlaylist(tester, const Size(1365, 900), visible: visible);
+      final search = find.byKey(const ValueKey('playlist-search'));
+      await tester.enterText(search, 'unmatched song');
+      await tester.pump();
+      visible.value = false;
+      await tester.pump();
+      visible.value = true;
+      await tester.pump();
+      expect(
+        tester.widget<TextField>(search).controller!.text,
+        'unmatched song',
+      );
+      await tester.tap(find.byTooltip('清空搜索'));
+      await tester.pump();
+      expect(tester.widget<TextField>(search).controller!.text, '');
+      expect(find.byTooltip('清空搜索'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'inline grid controls resize auto heights and protect six narrow columns',
+    (tester) async {
+      await _pumpPlaylist(tester, const Size(1900, 1100));
+      final scope = ProviderScope.containerOf(
+        tester.element(find.byType(PlaylistScreen)),
+      );
+      final ctl = scope.read(layoutOptionsProvider.notifier);
+      ctl.setWidth(-1);
+      ctl.setRadioColumns(3);
+      ctl.setHeightMode(RadioHeightMode.allStations);
+      await tester.pump();
+      final first = find.byKey(const ValueKey('playlist-radio-column-R1'));
+      final ninth = find.byKey(const ValueKey('playlist-radio-column-R9'));
+      final pool = find.byKey(const ValueKey('playlist-pool-side-panel'));
+      expect(
+        tester.getBottomRight(ninth).dy,
+        lessThanOrEqualTo(tester.getBottomRight(pool).dy + 1),
+      );
+      final height = tester.getSize(first).height;
+      tester.view.physicalSize = const Size(1900, 950);
+      await tester.pump();
+      expect(tester.getSize(first).height, lessThan(height));
+      ctl.setHeightMode(RadioHeightMode.oneRow);
+      await tester.pump();
+      expect(
+        tester.getSize(first).height,
+        closeTo(tester.getSize(pool).height, 1),
+      );
+      ctl.setRadioColumns(6);
+      tester.view.physicalSize = const Size(960, 950);
+      await tester.pump();
+      expect(tester.getSize(first).width, greaterThanOrEqualTo(205));
+      final second = find.byKey(const ValueKey('playlist-radio-column-R2'));
+      final third = find.byKey(const ValueKey('playlist-radio-column-R3'));
+      expect(
+        tester.getBottomRight(second).dx,
+        lessThanOrEqualTo(tester.getTopLeft(pool).dx - 12 + .01),
+      );
+      final firstY = tester.getTopLeft(first).dy;
+      final grid = find.byKey(const ValueKey('playlist-radio-board'));
+      tester
+          .widget<GridView>(grid)
+          .controller!
+          .jumpTo(
+            (tester.getSize(first).height + 12).clamp(
+              0,
+              tester
+                  .widget<GridView>(grid)
+                  .controller!
+                  .position
+                  .maxScrollExtent,
+            ),
+          );
+      await tester.pump();
+      expect(
+        tester.getTopLeft(third).dy +
+            tester.widget<GridView>(grid).controller!.offset,
+        greaterThan(firstY),
+      );
+      expect(
+        tester
+            .widget<Slider>(find.byKey(const ValueKey('radio-columns-slider')))
+            .max,
+        1,
+      );
+      expect(tester.getBottomRight(pool).dx, lessThanOrEqualTo(920));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'expanded page width stays inside window and list height is independent',
+    (tester) async {
+      await _pumpPlaylist(tester, const Size(1900, 1000));
+      final scope = ProviderScope.containerOf(
+        tester.element(find.byType(PlaylistScreen)),
+      );
+      scope.read(layoutOptionsProvider.notifier).setWidth(-1);
+      scope.read(layoutOptionsProvider.notifier).setRadioHeight(720);
+      await tester.pump();
+      final first = find.byKey(const ValueKey('playlist-radio-column-R1'));
+      final pool = find.byKey(const ValueKey('playlist-pool-side-panel'));
+      expect(tester.getTopLeft(first).dx, greaterThanOrEqualTo(40));
+      expect(tester.getBottomRight(pool).dx, lessThanOrEqualTo(1860));
+      expect(tester.getSize(first).height, 720);
+      expect(tester.takeException(), isNull);
+      tester.view.physicalSize = const Size(960, 900);
+      await tester.pump();
+      expect(tester.getBottomRight(pool).dx, lessThanOrEqualTo(920));
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('package playlist keeps the pool in a right side panel', (
     tester,
   ) async {
@@ -50,17 +200,29 @@ void main() {
 
     expect(poolPanel, findsOneWidget);
     expect(firstRadio, findsOneWidget);
+    final firstTop = tester.getTopLeft(firstRadio);
+    final firstWidth = tester.getSize(firstRadio).width;
+    final grid = find.byKey(const ValueKey('playlist-radio-board'));
+    tester
+        .widget<GridView>(grid)
+        .controller!
+        .jumpTo(
+          (tester.getSize(firstRadio).height + 12).clamp(
+            0,
+            tester.widget<GridView>(grid).controller!.position.maxScrollExtent,
+          ),
+        );
+    await tester.pump();
     expect(secondRadio, findsOneWidget);
-    expect(tester.getTopLeft(poolPanel).dy, tester.getTopLeft(firstRadio).dy);
+    expect(tester.getTopLeft(poolPanel).dy, firstTop.dy);
+    expect(tester.getTopLeft(poolPanel).dx, greaterThan(firstTop.dx));
+    // Auto columns preserve the minimum width, so narrow windows stack radios.
     expect(
-      tester.getTopLeft(poolPanel).dx,
-      greaterThan(tester.getTopLeft(firstRadio).dx),
+      tester.getTopLeft(secondRadio).dy +
+          tester.widget<GridView>(grid).controller!.offset,
+      greaterThan(firstTop.dy),
     );
-    expect(tester.getTopLeft(secondRadio).dy, tester.getTopLeft(firstRadio).dy);
-    expect(
-      tester.getTopLeft(secondRadio).dx,
-      greaterThan(tester.getTopLeft(firstRadio).dx),
-    );
+    expect(firstWidth, greaterThanOrEqualTo(LayoutOptions.minColumnWidth));
     expect(tester.takeException(), isNull);
   });
 
@@ -81,7 +243,7 @@ void main() {
   });
 
   testWidgets(
-    'builtin columns only accept inner scroll while control is held',
+    'builtin columns allow direct scrolling with or without control',
     (tester) async {
       await _pumpPlaylist(tester, const Size(1365, 900));
 
@@ -93,7 +255,7 @@ void main() {
       expect(builtinList, findsOneWidget);
       expect(
         tester.widget<ListView>(builtinList).physics,
-        isA<NeverScrollableScrollPhysics>(),
+        isA<ClampingScrollPhysics>(),
       );
 
       await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
@@ -115,6 +277,7 @@ Future<void> _pumpPlaylist(
   WidgetTester tester,
   Size size, {
   PlaylistCatalog? catalog,
+  ValueNotifier<bool>? visible,
 }) async {
   addTearDown(() {
     tester.view.resetPhysicalSize();
@@ -138,7 +301,16 @@ Future<void> _pumpPlaylist(
       const PlaylistCatalog(
         origin: PlaylistCatalogOrigin.package,
         sourcePath: 'test-radio-info.xml',
-        radios: kRadios,
+        radios: [
+          ...kRadios,
+          RadioStation(
+            code: 'R9',
+            name: 'Horizon Opus',
+            hue: 'cyan',
+            genre: 'Classical',
+            slot: 22,
+          ),
+        ],
         modes: kStationModes,
         freeRoamTracks: kTracks,
         eventTracks: kTracks,
@@ -157,7 +329,15 @@ Future<void> _pumpPlaylist(
           brightness: Brightness.light,
           accent: AppAccent.lime,
         ),
-        home: const Scaffold(body: PlaylistScreen()),
+        home: Scaffold(
+          body: visible == null
+              ? const PlaylistScreen()
+              : ValueListenableBuilder<bool>(
+                  valueListenable: visible,
+                  builder: (_, show, _) =>
+                      show ? const PlaylistScreen() : const SizedBox(),
+                ),
+        ),
       ),
     ),
   );

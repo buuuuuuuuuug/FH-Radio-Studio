@@ -135,14 +135,19 @@ void main() {
       ],
     );
 
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
-      _TestTheme(
-        child: SizedBox(
-          width: 312,
-          child: EditorSidePanel(
-            state: state,
-            analysis: analysis,
-            onAnalyze: () {},
+      ProviderScope(
+        overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+        child: _TestTheme(
+          child: SizedBox(
+            width: 312,
+            child: EditorSidePanel(
+              state: state,
+              analysis: analysis,
+              onAnalyze: () {},
+            ),
           ),
         ),
       ),
@@ -347,7 +352,8 @@ void main() {
       expect(_manualMainIcon('skip-back'), findsNothing);
       expect(_manualMainIcon('skip-fwd'), findsNothing);
       expect(find.textContaining('←/→ 1拍'), findsOneWidget);
-      expect(find.textContaining('Ctrl+←/→ 1ms'), findsOneWidget);
+      expect(find.textContaining('Ctrl + → 1ms'), findsOneWidget);
+      expect(find.text('Shift + → 10ms'), findsOneWidget);
       expect(find.byKey(const ValueKey('manual-refine-lock')), findsNothing);
       expect(find.text('锁定选点'), findsNothing);
       expect(find.text('套用 AI 建议'), findsOneWidget);
@@ -774,7 +780,7 @@ void main() {
     await _pumpEditor(tester, tempRoot.path, chromeHeight: chromeHeight);
     expect(tester.takeException(), isNull);
 
-    await tester.dragFrom(const Offset(280, 760), const Offset(0, -720));
+    await tester.dragFrom(const Offset(20, 760), const Offset(0, -900));
     await tester.pump();
 
     final aiCard = find.byKey(const ValueKey('editor-ai-card')).first;
@@ -830,7 +836,7 @@ void main() {
     },
   );
 
-  testWidgets('candidate preview does not change the selected row', (
+  testWidgets('confirmed manual selection opens directly on double click', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -839,79 +845,86 @@ void main() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
-
-    final tempRoot = Directory.systemTemp.createTempSync(
-      'replace_editor_preview_select_',
-    );
+    final tempRoot = Directory.systemTemp.createTempSync('editor_double_tap_');
     addTearDown(() {
       if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
     });
-
     await _pumpEditor(tester, tempRoot.path);
-    final container = ProviderScope.containerOf(
+    final c = ProviderScope.containerOf(
       tester.element(find.byType(ReplaceEditorScreen)),
     );
-    expect(container.read(replaceEditorProvider('cp-1')).tlIdx, 0);
-
-    final secondTlPreview = find.text('试听拼接').at(1);
-    await tester.ensureVisible(secondTlPreview);
-    await tester.tap(secondTlPreview);
-    await tester.pump();
-
-    expect(container.read(replaceEditorProvider('cp-1')).tlIdx, 0);
-  });
-
-  testWidgets('confirmed candidates lock until directly unlocked in the UI', (
-    tester,
-  ) async {
-    tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(1200, 1100);
-    addTearDown(() {
-      tester.view.resetPhysicalSize();
-      tester.view.resetDevicePixelRatio();
-    });
-
-    final tempRoot = Directory.systemTemp.createTempSync(
-      'replace_editor_confirmed_lock_',
+    expect(c.read(replaceEditorProvider('cp-1')).tdConfirmed, isTrue);
+    expect(
+      tester
+          .widgetList<TimeGroupCard>(find.byType(TimeGroupCard))
+          .every((card) => card.hideCandidates),
+      isTrue,
     );
-    addTearDown(() {
-      if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
-    });
-
-    await _pumpEditor(tester, tempRoot.path);
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(ReplaceEditorScreen)),
+    final manual = find.byKey(const ValueKey('editor-manual-refine-td'));
+    await Scrollable.ensureVisible(tester.element(manual), alignment: .45);
+    await tester.pump();
+    await tester.tap(manual);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const ValueKey('manual-refine-overlay')), findsNothing);
+    await tester.tap(manual);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 260));
+    expect(find.byKey(const ValueKey('manual-refine-overlay')), findsOneWidget);
+    expect(c.read(replaceEditorProvider('cp-1')).tdConfirmed, isFalse);
+    expect(
+      find.byKey(const ValueKey('manual-refine-ai-apply-1')),
+      findsOneWidget,
     );
-    var state = container.read(replaceEditorProvider('cp-1'));
-    expect(state.tdConfirmed, isTrue);
-    expect(state.tdIdx, 0);
-    expect(find.text('当前选择'), findsWidgets);
-    expect(find.text('解锁重选'), findsWidgets);
-
-    final secondTd = find.text('第二段副歌起始');
-    await tester.ensureVisible(secondTd);
-    await tester.tap(secondTd);
+    double point() => tester
+        .widget<ManualFocusWaveform>(find.byType(ManualFocusWaveform))
+        .handles
+        .single
+        .t;
+    final startPoint = point();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump(const Duration(milliseconds: 450));
+    expect(point(), closeTo(startPoint + .01, .00001));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(point(), greaterThan(startPoint + .02));
+    // Releasing Shift while the arrow is still held must not switch to beats.
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    final released = point();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(point(), released);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(point(), released);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(point(), released);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(point(), greaterThan(released + .01));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    final zoom = tester.widget<ManualFocusWaveform>(
+      find.byType(ManualFocusWaveform),
+    );
+    await tester.tap(find.byKey(const ValueKey('manual-zoom-in')));
     await tester.pump();
-
-    state = container.read(replaceEditorProvider('cp-1'));
-    expect(state.tdConfirmed, isTrue);
-    expect(state.tdIdx, 0);
-
-    final unlock = find.text('解锁重选').first;
-    await tester.ensureVisible(unlock);
+    final enlarged = tester.widget<ManualFocusWaveform>(
+      find.byType(ManualFocusWaveform),
+    );
+    expect(enlarged.windowEnd! - enlarged.windowStart, lessThan(zoom.duration));
+    await tester.tap(find.byKey(const ValueKey('manual-zoom-out')));
     await tester.pump();
-    await tester.tap(unlock);
-    await tester.pump();
-    expect(container.read(replaceEditorProvider('cp-1')).tdConfirmed, isFalse);
-
-    await tester.ensureVisible(secondTd);
-    await tester.pump();
-    await tester.tap(secondTd);
-    await tester.pump();
-
-    state = container.read(replaceEditorProvider('cp-1'));
-    expect(state.tdConfirmed, isFalse);
-    expect(state.tdIdx, 1);
+    final small = tester.widget<ManualFocusWaveform>(
+      find.byType(ManualFocusWaveform),
+    );
+    expect(
+      small.windowEnd! - small.windowStart,
+      greaterThan(enlarged.windowEnd! - enlarged.windowStart),
+    );
+    await tester.tap(find.byTooltip('取消人工选点'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('replace editor prompts to save only changed completed configs', (
@@ -1126,7 +1139,10 @@ void main() {
     expect(state.ai.sourceSampleRate, 44100);
     expect(state.ai.channels, 2);
     expect(state.ai.sourceSamples, 4354875);
-    expect(find.text('0:00.00 / 1:38.75', findRichText: true), findsOneWidget);
+    expect(
+      find.text('0:00.000 / 1:38.750', findRichText: true),
+      findsOneWidget,
+    );
     expect(find.textContaining('/ --:--', findRichText: true), findsNothing);
   });
 
@@ -1221,7 +1237,13 @@ void main() {
       final playButton = find.byKey(const ValueKey('editor-play-inline'));
       expect(playButton, findsOneWidget);
       expect(tester.widget<GestureDetector>(playButton).onTap, isNotNull);
-      await tester.tap(playButton);
+      await tester.ensureVisible(playButton);
+      await tester.pump(const Duration(milliseconds: 180));
+      final visiblePlay = find
+          .byKey(const ValueKey('editor-play-floating'))
+          .hitTestable();
+      expect(visiblePlay, findsOneWidget);
+      await tester.tap(visiblePlay);
       await tester.pump(const Duration(milliseconds: 120));
       expect(tester.takeException(), isNull);
     } finally {

@@ -1,6 +1,8 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(fh_radio_studio LANGUAGES CXX)
+project(fh_radio_studio LANGUAGES C CXX)
+add_library(fh_radio_close_guard SHARED runner/close_guard.c)
+target_link_libraries(fh_radio_close_guard PRIVATE user32)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
@@ -132,7 +134,7 @@ if(NOT FH_RADIO_STUDIO_RELEASE_AUDIO_TOOLS_READY)
   endif()
 endif()
 
-install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+install(TARGETS ${BINARY_NAME} fh_radio_close_guard RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

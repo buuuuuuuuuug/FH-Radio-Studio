@@ -3,13 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/app_info.dart';
-import '../state/app_state.dart';
 import '../state/studio_state.dart';
 import '../state/router.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../theme/tokens.dart';
 import 'nav_item.dart';
+import '../tweaks/tweaks_panel.dart';
+import '../state/editor_options.dart';
 
 /// 左侧 220px 导航栏
 class Sidebar extends ConsumerWidget {
@@ -28,6 +29,10 @@ class Sidebar extends ConsumerWidget {
     String? lastGroup;
     final children = <Widget>[];
     for (final spec in kNavItems) {
+      if (spec.id == 'siren' &&
+          !ref.watch(editorOptionsProvider).sirenEnabled) {
+        continue;
+      }
       if (spec.group != null && spec.group != lastGroup) {
         if (children.isNotEmpty) children.add(const SizedBox(height: 14));
         children.add(
@@ -68,10 +73,18 @@ class Sidebar extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(child: ListView(children: children)),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 160),
+            alignment: Alignment.bottomCenter,
+            child: ref.watch(settingsExpandedProvider)
+                ? const TweaksPanel(embedded: true)
+                : const SizedBox.shrink(),
+          ),
           NavItem(
             spec: const NavSpec(id: 'settings', label: '设置', icon: 'settings'),
-            active: false,
-            onTap: () => ref.read(tweaksOpenProvider.notifier).state = true,
+            active: ref.watch(settingsExpandedProvider),
+            onTap: () => ref.read(settingsExpandedProvider.notifier).state =
+                !ref.read(settingsExpandedProvider),
           ),
           const SizedBox(height: 4),
           Padding(
@@ -97,6 +110,8 @@ class Sidebar extends ConsumerWidget {
         return RmRoutes.pool;
       case 'siren':
         return RmRoutes.siren;
+      case 'settings':
+        return RmRoutes.settings;
       case 'playlist':
         return RmRoutes.playlist;
     }
@@ -124,17 +139,35 @@ class TabsBar extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          for (final spec in kNavItems)
+          for (final spec in [
+            ...kNavItems,
+            const NavSpec(id: 'settings', label: '设置', icon: 'settings'),
+          ])
             Builder(
               builder: (context) {
+                if (spec.id == 'siren' &&
+                    !ref.watch(editorOptionsProvider).sirenEnabled) {
+                  return const SizedBox.shrink();
+                }
                 final enabled =
                     !toolchainLocked || _toolchainLockAllowsNavItem(spec.id);
                 return TabItem(
                   spec: spec,
-                  active: spec.id == activeId,
+                  active: spec.id == 'settings'
+                      ? ref.watch(settingsExpandedProvider)
+                      : spec.id == activeId,
                   enabled: enabled,
                   tooltip: enabled ? null : lockMessage,
-                  onTap: enabled ? () => context.go(_pathFor(spec.id)) : null,
+                  onTap: enabled
+                      ? () {
+                          if (spec.id == 'settings') {
+                            ref.read(settingsExpandedProvider.notifier).state =
+                                !ref.read(settingsExpandedProvider);
+                          } else {
+                            context.go(_pathFor(spec.id));
+                          }
+                        }
+                      : null,
                 );
               },
             ),
@@ -159,6 +192,8 @@ class TabsBar extends ConsumerWidget {
         return RmRoutes.pool;
       case 'siren':
         return RmRoutes.siren;
+      case 'settings':
+        return RmRoutes.settings;
       case 'playlist':
         return RmRoutes.playlist;
     }

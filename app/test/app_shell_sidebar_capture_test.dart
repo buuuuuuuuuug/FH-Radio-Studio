@@ -48,7 +48,7 @@ void main() {
       ),
     );
 
-    expect(find.text('FH Radio Studio 0.1.0-dev.7'), findsOneWidget);
+    expect(find.text('$appDisplayName 0.1.0-dev.7'), findsOneWidget);
     expect(find.text('build None'), findsOneWidget);
     expect(find.textContaining('FH6 build'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -68,40 +68,36 @@ void main() {
       ),
     );
 
-    expect(find.text('FH Radio Studio 0.1.0-rc.1'), findsOneWidget);
+    expect(find.text('$appDisplayName 0.1.0-rc.1'), findsOneWidget);
     expect(find.text('build abc123'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'capture app shell sidebar navigation',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-      });
+  testWidgets('capture app shell sidebar navigation', (tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
 
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureSidebar(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1244, 900),
-        outputPath: p.join(outDir.path, 'app_shell_sidebar_regular.png'),
-      );
-      await _captureSidebar(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'app_shell_sidebar_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_APP_SHELL_SIDEBAR'] != '1',
-  );
+    await _captureSidebar(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1244, 900),
+      outputPath: p.join(outDir.path, 'app_shell_sidebar_regular.png'),
+    );
+    await _captureSidebar(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'app_shell_sidebar_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_APP_SHELL_SIDEBAR'] != '1');
 }
 
 Future<void> _pumpSidebarWithInfo(

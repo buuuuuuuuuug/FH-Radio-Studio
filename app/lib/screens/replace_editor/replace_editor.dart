@@ -1,28 +1,47 @@
+import 'waveform_overview.dart';
+import '../../core/playback_window.dart';
+import '../../widgets/quick_assign_dialog.dart';
+import '../../state/editor_shortcuts.dart';
+import '../../state/editor_navigation.dart';
+import '../../widgets/editor_song_navigation.dart';
+import '../../state/audition_preferences.dart';
+import '../../widgets/audition_settings_button.dart';
+import '../../core/seam_audition_player.dart';
+import 'package:go_router/go_router.dart';
+import '../../core/delayed_repeat.dart';
+import 'editor_timecode.dart';
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import '../../state/layout_options.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 
 import '../../core/system_audio_output.dart';
+import '../../core/studio_audio_players.dart';
 import '../../core/track_timing_config.dart';
 import '../../domain/replacement_models.dart';
 import '../../state/audio_analysis_state.dart';
 import '../../state/studio_state.dart';
 import '../../state/track_timing_state.dart';
+import '../../state/editor_options.dart';
+import '../../state/router.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/rm_banner.dart';
 import '../../widgets/rm_button.dart';
 import '../../widgets/rm_icon.dart';
+import '../../widgets/rm_chip.dart';
 import 'ai_pending_overlay.dart';
 import 'breadcrumb.dart';
 import 'group_colors.dart';
 import 'manual_focus_waveform.dart';
+import '../../widgets/time_input_field.dart';
 import 'progress_strip.dart';
 import 'replace_state.dart';
 import 'side_panel.dart';
@@ -90,9 +109,11 @@ class ReplaceEditorScreen extends ConsumerStatefulWidget {
     super.key,
     required this.trackId,
     this.enableAudio = true,
+    this.returnToPlaylist = false,
   });
   final String trackId;
   final bool enableAudio;
+  final bool returnToPlaylist;
 
   @override
   ConsumerState<ReplaceEditorScreen> createState() =>
@@ -127,15 +148,24 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   Timer? _positionHoldTimer;
   String? _analysisStartedFor;
   _PreviewRange? _previewRange;
+  SeamAuditionPlayer? _seamAudition;
   bool _sideDrawerOpen = false;
   bool _savePromptOpen = false;
   bool _lastObservedAllConfirmed = false;
   double _sidePanelExtraScroll = 0;
   _TransportDockMetrics? _transportDockMetrics;
   _ManualRefineSession? _manualSession;
+  bool _manualDraftChanged = false;
+  _ManualRefineSession? _manualInitial;
+  final _manualUndo = <_ManualRefineSession>[];
+  int _manualSuggestionCursor = -1;
+  ReplaceEditorNotifier? _manualNotifier;
   bool _altHeld = false;
   bool _shiftHeld = false;
   bool _ctrlHeld = false;
+  final _keyRepeat = DelayedRepeat();
+  LogicalKeyboardKey? _repeatKey;
+  final _blockedRepeatKeys = <LogicalKeyboardKey>{};
 
   @override
   void initState() {
@@ -149,7 +179,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         n.setPlaying(playing && !player.state.completed);
       });
       _completedSub = player.stream.completed.listen((completed) {
-        if (!mounted || !completed) return;
+        if (!mounted || !completed || _seamAudition?.active == true) return;
         final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
         _previewRange = null;
         _rangeSeeking = false;
@@ -178,8 +208,13 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   void didUpdateWidget(covariant ReplaceEditorScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.trackId == widget.trackId) return;
+    _clearManualHooks();
+    _manualSession = null;
+    _manualDraftChanged = false;
     _analysisStartedFor = null;
     _clearLocalPlaybackState();
+    if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
+    _lastObservedAllConfirmed = false;
     final player = _player;
     if (player != null) {
       unawaited(player.stop());
@@ -196,6 +231,11 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
 
   @override
   void dispose() {
+    _keyRepeat.stop();
+    unawaited(_seamAudition?.cancel());
+    _clearManualHooks();
+    _loadVersion++;
+    _playbackVersion++;
     _positionSub?.cancel();
     _playingSub?.cancel();
     _completedSub?.cancel();
@@ -203,7 +243,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     _audioOutputFollower?.dispose();
     final player = _player;
     if (player != null) {
-      unawaited(player.dispose());
+      unawaited(player.pause());
     }
     _clearPreviewPositionHold();
     _pageScrollController.dispose();
@@ -217,7 +257,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     }
     final player = _player;
     if (player != null) return player;
-    final next = Player();
+    final next = StudioAudioPlayers.editor;
     _audioOutputFollower = followSystemAudioOutput(next);
     return _player = next;
   }
@@ -267,10 +307,8 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     return true;
   }
 
-  bool _isAltKey(LogicalKeyboardKey key) {
-    return key == LogicalKeyboardKey.altLeft ||
-        key == LogicalKeyboardKey.altRight;
-  }
+  bool _isAltKey(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight;
 
   bool _isShiftKey(LogicalKeyboardKey key) {
     return key == LogicalKeyboardKey.shiftLeft ||
@@ -282,72 +320,179 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         key == LogicalKeyboardKey.controlRight;
   }
 
-  void _onKey(KeyEvent e) {
-    if (e is! KeyDownEvent) return;
-    final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
-    final s = ref.read(replaceEditorProvider(widget.trackId));
-    final manualOpen = _manualSession != null;
-    final shift = manualOpen
-        ? _shiftHeld
-        : HardwareKeyboard.instance.isShiftPressed;
-    final ctrl = manualOpen
-        ? _ctrlHeld
-        : HardwareKeyboard.instance.isControlPressed;
-    final manualNudge = ctrl ? 0.001 : (shift ? 0.010 : (60 / s.ai.bpm));
-    if (_manualSession != null && e.logicalKey == LogicalKeyboardKey.escape) {
-      _cancelManualRefine();
-    } else if (_manualSession != null &&
-        e.logicalKey == LogicalKeyboardKey.enter) {
-      _confirmManualRefine(n);
-    } else if (_manualSession != null &&
-        e.logicalKey == LogicalKeyboardKey.arrowLeft) {
-      _nudgeManualDraft(-manualNudge);
-    } else if (_manualSession != null &&
-        e.logicalKey == LogicalKeyboardKey.arrowRight) {
-      _nudgeManualDraft(manualNudge);
-    } else if (e.logicalKey == LogicalKeyboardKey.space) {
-      unawaited(_togglePlayback(s, n));
-    } else if ((HardwareKeyboard.instance.isControlPressed ||
-            HardwareKeyboard.instance.isMetaPressed) &&
-        e.logicalKey == LogicalKeyboardKey.keyZ) {
-      n.undo();
-    } else if (e.logicalKey == LogicalKeyboardKey.enter) {
-      n.confirmActive();
-      _scheduleSavePromptIfNeeded(
-        ref.read(replaceEditorProvider(widget.trackId)),
-      );
-    } else if (_segmentIndexForKey(e.logicalKey) case final index?) {
-      n.jumpToSegment(index);
-      if (index >= 0 && index < s.ai.segments.length) {
-        unawaited(_seekTo(s, n, s.ai.segments[index].start));
-      }
-    } else if (e.logicalKey == LogicalKeyboardKey.arrowLeft) {
-      final step = shift ? -0.001 : -(60 / s.ai.bpm);
-      unawaited(_seekTo(s, n, s.playhead + step));
-    } else if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
-      final step = shift ? 0.001 : (60 / s.ai.bpm);
-      unawaited(_seekTo(s, n, s.playhead + step));
+  void _returnToList() {
+    if (widget.returnToPlaylist && context.canPop()) {
+      context.pop();
+    } else {
+      context.go(widget.returnToPlaylist ? RmRoutes.playlist : RmRoutes.pool);
     }
   }
 
-  int? _segmentIndexForKey(LogicalKeyboardKey key) {
-    const keys = [
-      LogicalKeyboardKey.digit1,
-      LogicalKeyboardKey.digit2,
-      LogicalKeyboardKey.digit3,
-      LogicalKeyboardKey.digit4,
-      LogicalKeyboardKey.digit5,
-      LogicalKeyboardKey.digit6,
-      LogicalKeyboardKey.digit7,
-      LogicalKeyboardKey.digit8,
-      LogicalKeyboardKey.digit9,
-    ];
-    final index = keys.indexOf(key);
-    return index < 0 ? null : index;
+  void _onKey(KeyEvent e) {
+    if (e is! KeyDownEvent || _blockedRepeatKeys.contains(e.logicalKey)) return;
+    final bindings = ref.read(editorShortcutsProvider);
+    final manual = _manualSession != null;
+    final h = HardwareKeyboard.instance;
+    final shift = manual ? _shiftHeld : h.isShiftPressed;
+    final ctrl = h.isControlPressed;
+    final alt = manual ? _altHeld : h.isAltPressed;
+    EditorAction? actionFor() {
+      for (final entry in [
+        ...bindings.entries.where((e) => loopNudgeActions.contains(e.key)),
+        ...bindings.entries.where((e) => !loopNudgeActions.contains(e.key)),
+      ]) {
+        if (entry.value.matches(
+          e,
+          ctrl: ctrl,
+          shift: shift,
+          alt: alt,
+          meta: h.isMetaPressed,
+        )) {
+          return entry.key;
+        }
+      }
+      return null;
+    }
+
+    final action = actionFor();
+    final moveLoop = action != null && loopNudgeActions.contains(action);
+    if (moveLoop && (!manual || !_manualSession!.kind.isLoop)) return;
+    if (manual &&
+        (action == EditorAction.suggestionPrevious ||
+            action == EditorAction.suggestionNext ||
+            action == EditorAction.restoreSaved)) {
+      TimeInputValidation.flush();
+      if (TimeInputValidation.invalid.isNotEmpty) return;
+      _keyRepeat.stop();
+      _repeatKey = null;
+      _hotkeysFocus.requestFocus();
+      if (action == EditorAction.restoreSaved) {
+        _restoreSavedManual();
+      } else {
+        _cycleManualSuggestion(
+          action == EditorAction.suggestionPrevious ? -1 : 1,
+        );
+      }
+      return;
+    }
+    if (manual && action == EditorAction.undo) {
+      TimeInputValidation.flush();
+      _undoManualDraft();
+      return;
+    }
+    if (e.logicalKey != LogicalKeyboardKey.escape &&
+        FocusManager.instance.primaryFocus?.context
+                ?.findAncestorStateOfType<EditableTextState>() !=
+            null) {
+      return;
+    }
+    final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
+    final state = ref.read(replaceEditorProvider(widget.trackId));
+    if (e.logicalKey == LogicalKeyboardKey.escape) {
+      if (manual) {
+        _cancelManualRefine();
+      } else {
+        _returnToList();
+      }
+      return;
+    }
+    if (action == null) return;
+    if (action == EditorAction.assign && !manual) {
+      unawaited(showQuickAssign(context, state.track));
+      return;
+    }
+    if (nudgeActions.contains(action) || moveLoop) {
+      final beat = state.ai.bpm > 0 ? 60 / state.ai.bpm : .5;
+      final delta = switch (baseNudgeAction(action)) {
+        EditorAction.beatBack => -beat,
+        EditorAction.beatForward => beat,
+        EditorAction.tenBack => -.010,
+        EditorAction.tenForward => .010,
+        EditorAction.oneBack => -.001,
+        _ => .001,
+      };
+      if (manual) {
+        _nudgeManualDraft(delta, moveLoop: moveLoop);
+        _startKeyRepeat(e.logicalKey, delta, moveLoop: moveLoop);
+      } else {
+        unawaited(_seekTo(state, n, state.playhead + delta));
+      }
+    } else if (action == EditorAction.play) {
+      unawaited(
+        _togglePlayback(
+          manual ? _manualPreviewState(state, _manualSession!) : state,
+          n,
+        ),
+      );
+    } else if (action == EditorAction.confirm) {
+      if (manual) {
+        _confirmManualRefine(n);
+      } else {
+        n.confirmActive();
+        _scheduleSavePromptIfNeeded(
+          ref.read(replaceEditorProvider(widget.trackId)),
+        );
+      }
+    } else if (action == EditorAction.undo) {
+      n.undo();
+    } else if (!manual &&
+        (action == EditorAction.previous || action == EditorAction.next)) {
+      unawaited(
+        openAdjacentEditorSong(
+          context,
+          trackId: widget.trackId,
+          step: action == EditorAction.previous ? -1 : 1,
+          returnToPlaylist: widget.returnToPlaylist,
+        ),
+      );
+    }
+  }
+
+  // A held arrow belongs to the modifier combination that started it.
+  // Changing that combination blocks it until the arrow is physically released.
+  void _handleHeldKeyTransition(KeyEvent event) {
+    final key = event.logicalKey;
+    if (event is KeyUpEvent) _blockedRepeatKeys.remove(key);
+    final combination = ref
+        .read(editorShortcutsProvider)[EditorAction.loopBeatBack]
+        ?.extraKey;
+    final modifier = modifierKey(key) || key == combination;
+    if (_repeatKey != null &&
+        (key == _repeatKey && event is KeyUpEvent ||
+            modifier && (event is KeyUpEvent || event is KeyDownEvent))) {
+      if (modifier) _blockedRepeatKeys.add(_repeatKey!);
+      _keyRepeat.stop();
+      _repeatKey = null;
+    }
+  }
+
+  void _startKeyRepeat(
+    LogicalKeyboardKey key,
+    double step, {
+    bool moveLoop = false,
+  }) {
+    _repeatKey = key;
+    _keyRepeat.start(() {
+      if (!mounted ||
+          _manualSession == null ||
+          TimeInputValidation.focused.isNotEmpty) {
+        _keyRepeat.stop();
+        return;
+      }
+      _nudgeManualDraft(step, moveLoop: moveLoop);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AuditionPreferences>(auditionPreferencesProvider, (_, next) {
+      if (widget.enableAudio &&
+          _player != null &&
+          Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] != '1') {
+        unawaited(_player!.setVolume(next.volume));
+      }
+    });
+
     final s = ref.watch(replaceEditorProvider(widget.trackId));
     final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
     final cli = ref.watch(studioProvider);
@@ -369,7 +514,39 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     return Focus(
       focusNode: _hotkeysFocus,
       autofocus: true,
+      onFocusChange: (focused) {
+        if (!focused) _keyRepeat.stop();
+      },
       onKeyEvent: (_, e) {
+        _handleHeldKeyTransition(e);
+        if (TimeInputValidation.focused.isNotEmpty) {
+          final h = HardwareKeyboard.instance;
+          final keys = ref.read(editorShortcutsProvider);
+          final manualAction =
+              [
+                EditorAction.undo,
+                EditorAction.suggestionPrevious,
+                EditorAction.suggestionNext,
+                EditorAction.restoreSaved,
+              ].any(
+                (action) => keys[action]!.matches(
+                  e,
+                  ctrl: h.isControlPressed,
+                  shift: h.isShiftPressed,
+                  alt: h.isAltPressed,
+                  meta: h.isMetaPressed,
+                ),
+              );
+          if (_manualSession != null && manualAction && e is KeyDownEvent) {
+            _syncModifierHeld(e);
+            _onKey(e);
+            return KeyEventResult.handled;
+          }
+          if (e.logicalKey != LogicalKeyboardKey.escape) {
+            return KeyEventResult.ignored;
+          }
+          TimeInputValidation.flush();
+        }
         _syncModifierHeld(e);
         _onKey(e);
         return KeyEventResult.handled;
@@ -425,7 +602,10 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   }
 
   _EditorLayoutMetrics _layoutMetrics(double maxWidth) {
-    final pageWidth = math.min(maxWidth, RmTokens.pageWide);
+    final pageWidth = math.min(
+      maxWidth,
+      ref.watch(layoutOptionsProvider).pageWidth(RmTokens.pageWide),
+    );
     final horizontalPadding = maxWidth < 900 ? 24.0 : 40.0;
     final innerWidth = math.max(0.0, pageWidth - horizontalPadding * 2);
     final sideWidth = innerWidth >= 1180 ? 340.0 : 312.0;
@@ -456,10 +636,42 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     final mainColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        EditorBreadcrumb(
-          trackTitle: s.track.title,
-          assignedTo: s.track.assignedTo,
-          slot: s.track.slot,
+        LayoutBuilder(
+          builder: (context, c) {
+            final breadcrumb = EditorBreadcrumb(
+              trackTitle: s.track.title,
+              onBack: _returnToList,
+              backLabel: widget.returnToPlaylist
+                  ? '播放列表 · Esc 返回'
+                  : '自建歌曲 · Esc 返回',
+              assignedTo: s.track.assignedTo,
+              slot: s.track.slot,
+            );
+            final navigation = EditorSongNavigation(
+              trackId: widget.trackId,
+              returnToPlaylist: widget.returnToPlaylist,
+            );
+            if (c.maxWidth < 620) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  breadcrumb,
+                  Align(alignment: Alignment.centerRight, child: navigation),
+                  const SizedBox(height: 12),
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: breadcrumb),
+                const SizedBox(width: 12),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: navigation,
+                ),
+              ],
+            );
+          },
         ),
         _pageHead(context, s, n),
         const SizedBox(height: 12),
@@ -516,43 +728,68 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   ) {
     final rm = context.rm;
     final t = s.track;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    final title = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(t.title, style: RmText.pageH1(color: rm.fg)),
-              const SizedBox(height: 6),
-              Text(
-                '${t.artist} · ${formatTimecode(t.durationSec)} · ${t.bpm} BPM · ${t.key} · 配置 6 个时间点，确认后这首歌即可用于游戏。',
-                style: RmText.body(color: rm.fg3),
-              ),
-            ],
-          ),
+        Text(t.title, style: RmText.pageH1(color: rm.fg)),
+        const SizedBox(height: 6),
+        RmChip(
+          label: t.assignedTo == null
+              ? '未分配'
+              : '分配至 ${t.assignedTo} · slot ${t.slot}',
+          variant: RmChipVariant.muted,
+          showDot: true,
         ),
-        Row(
-          children: [
-            RmButton(
-              onPressed: () =>
-                  _saveConfig(context, n, title: s.track.title, export: true),
-              leading: const RmIcon('export', size: 12),
-              label: '导出此曲配置',
-            ),
-            const SizedBox(width: 8),
-            RmButton(
-              onPressed: s.allConfirmed
-                  ? () => _saveConfig(context, n, title: s.track.title)
-                  : null,
-              disabled: !s.allConfirmed,
-              variant: RmButtonVariant.primary,
-              leading: const RmIcon('check', size: 12),
-              label: '标记为已配置',
-            ),
-          ],
+        const SizedBox(height: 6),
+        Text(
+          '${t.artist} · ${formatEditorTimecode(t.durationSec)} · ${t.bpm} BPM · ${t.key} · 配置 6 个时间点，确认后这首歌即可用于游戏。',
+          style: RmText.body(color: rm.fg3),
         ),
       ],
+    );
+    final actions = Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        RmButton(
+          key: const ValueKey('editor-quick-assign'),
+          label: '分配电台',
+          tooltip:
+              '分配电台 · ${ref.watch(editorShortcutsProvider)[EditorAction.assign]!.label}',
+          onPressed: () => showQuickAssign(context, s.track),
+        ),
+        RmButton(
+          onPressed: () =>
+              _saveConfig(context, n, title: s.track.title, export: true),
+          leading: const RmIcon('export', size: 12),
+          label: '导出此曲配置',
+        ),
+        RmButton(
+          onPressed: s.dirty || s.allConfirmed
+              ? () => _saveConfig(context, n, title: s.track.title)
+              : null,
+          disabled: !s.allConfirmed,
+          variant: RmButtonVariant.primary,
+          leading: const RmIcon('check', size: 12),
+          label: '保存点位',
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, c) => c.maxWidth >= 1000
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(child: title),
+                const SizedBox(width: 16),
+                actions,
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [title, const SizedBox(height: 12), actions],
+            ),
     );
   }
 
@@ -640,6 +877,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     );
   }
 
+  String _manualShortcutHint() {
+    final keys = ref.watch(editorShortcutsProvider);
+    return '${keys[EditorAction.beatBack]!.label}/${keys[EditorAction.beatForward]!.label} 1拍 · '
+        '${keys[EditorAction.tenForward]!.label} 10ms · ${keys[EditorAction.oneForward]!.label} 1ms · '
+        '两端同移组合键：${loopCombinationLabel(keys)}（配合原微调键） · '
+        '${keys[EditorAction.suggestionPrevious]!.label}/${keys[EditorAction.suggestionNext]!.label} 切换建议 · '
+        '${keys[EditorAction.restoreSaved]!.label} 已保存配置 · ${keys[EditorAction.undo]!.label} 撤销 · Esc 返回';
+  }
+
   Widget _manualRefineOverlay(
     BuildContext context,
     ReplaceEditorState s,
@@ -665,7 +911,13 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
               state: _manualPreviewState(s, session),
               session: session,
               viewport: viewport,
-              aiCandidates: _aiCandidatesFor(s, session.kind),
+              preferredWidth: ref
+                  .watch(layoutOptionsProvider)
+                  .manualRefineWidth,
+              aiCandidates: _manualSuggestions(s, session.kind),
+              seamless:
+                  ref.read(editorOptionsProvider).slmEnabled &&
+                  session.kind.isLoop,
               snapActive: !_altHeld,
               onPlace: (seconds, {required isMove}) =>
                   _placeManualDraft(seconds, isMove: isMove),
@@ -674,6 +926,8 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
               onNudge: _nudgeManualDraftTarget,
               onAudition: () => _previewManualAudition(n),
               onCancel: _cancelManualRefine,
+              onUndo: _manualUndo.isEmpty ? null : _undoManualDraft,
+              shortcutHint: _manualShortcutHint(),
               onConfirm: () => _confirmManualRefine(n),
               onTogglePlay: () => unawaited(
                 _togglePlayback(
@@ -761,14 +1015,82 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     };
   }
 
+  List<dynamic> _manualSuggestions(ReplaceEditorState state, GroupKind kind) {
+    final options = ref.read(editorOptionsProvider);
+    if (options.manualOnly && !(options.slmEnabled && kind.isLoop)) {
+      return const [];
+    }
+    return _aiCandidatesFor(state, kind);
+  }
+
+  void _cycleManualSuggestion(int step) {
+    final session = _manualSession;
+    if (session == null) return;
+    final state = ref.read(replaceEditorProvider(widget.trackId));
+    final candidates = _manualSuggestions(state, session.kind);
+    if (candidates.isEmpty) return;
+    final matched = candidates.indexWhere(session.matches);
+    final index = matched >= 0 ? matched : _manualSuggestionCursor;
+    final next = index < 0
+        ? (step < 0 ? candidates.length - 1 : 0)
+        : (index + step) % candidates.length;
+    _applyAiCandidateToManual(candidates[next]);
+  }
+
+  void _restoreSavedManual() {
+    final session = _manualSession;
+    if (session == null) return;
+    final state = ref.read(replaceEditorProvider(widget.trackId));
+    final config = ref
+        .read(trackTimingProvider.notifier)
+        .configForPath(state.track.source);
+    final markers = config?.markersSec ?? const <String, double>{};
+    final keys = switch (session.kind) {
+      GroupKind.td => ['TrackDrop'],
+      GroupKind.pd => ['PostDrop'],
+      GroupKind.tl => ['TrackLoopStart', 'TrackLoopEnd'],
+      GroupKind.pl => ['PostRaceLoopStart', 'PostRaceLoopEnd'],
+    };
+    final times = keys.map((k) => markers[k]).toList();
+    if (times.any(
+          (t) => t == null || !t.isFinite || t < 0 || t > state.ai.durationSec,
+        ) ||
+        session.kind.isLoop && times[1]! <= times[0]!) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前时间组没有可用的已保存配置。')));
+      return;
+    }
+    _applyAiCandidateToManual(
+      session.kind.isLoop
+          ? LoopCandidate(
+              start: times[0]!,
+              end: times[1]!,
+              score: 1,
+              bars: _barsForManual(times[0]!, times[1]!, state.ai.bpm),
+              why: '已保存配置',
+            )
+          : PointCandidate(t: times[0]!, score: 1, why: '已保存配置'),
+    );
+  }
+
   void _openManualRefine(
     ReplaceEditorState state,
     ReplaceEditorNotifier notifier,
     GroupKind kind,
   ) {
     if (state.confirmedOf(kind)) return;
+    _hotkeysFocus.requestFocus();
     final session = _ManualRefineSession.fromState(state, kind);
+    _manualNotifier = notifier;
+    notifier.pendingManualDirty = () => mounted && _manualDraftChanged;
+    notifier.commitManualDraft = () => _commitManualDraftBeforeSave(notifier);
+    notifier.discardManualDraft = _cancelManualRefine;
     setState(() {
+      _manualDraftChanged = false;
+      _manualInitial = session;
+      _manualSuggestionCursor = -1;
+      _manualUndo.clear();
       _manualSession = session;
       _altHeld = HardwareKeyboard.instance.isAltPressed;
       _shiftHeld = HardwareKeyboard.instance.isShiftPressed;
@@ -786,11 +1108,89 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     });
   }
 
+  bool _sameManual(_ManualRefineSession a, _ManualRefineSession b) =>
+      a.kind == b.kind &&
+      (a.kind.isLoop
+          ? a.start == b.start && a.end == b.end
+          : a.pointTime == b.pointTime);
+  void _updateManualDraft(
+    _ManualRefineSession updated, {
+    bool coalesce = false,
+  }) {
+    final current = _manualSession;
+    if (current == null || _sameManual(current, updated)) return;
+    if (!coalesce || _manualUndo.isEmpty) {
+      _manualUndo.add(current);
+      if (_manualUndo.length > 200) _manualUndo.removeAt(0);
+    }
+    setState(() {
+      _manualSession = updated;
+      _manualDraftChanged =
+          _manualInitial == null || !_sameManual(updated, _manualInitial!);
+    });
+  }
+
+  void _undoManualDraft() {
+    _keyRepeat.stop();
+    _repeatKey = null;
+    if (_manualSession == null || _manualUndo.isEmpty) return;
+    final restored = _manualUndo.removeLast();
+    _hotkeysFocus.requestFocus();
+    setState(() {
+      _manualSession = restored;
+      _manualDraftChanged =
+          _manualInitial == null || !_sameManual(restored, _manualInitial!);
+    });
+    final state = ref.read(replaceEditorProvider(widget.trackId));
+    unawaited(
+      _seekTo(
+        state,
+        ref.read(replaceEditorProvider(widget.trackId).notifier),
+        restored.focusTime,
+      ),
+    );
+  }
+
   void _cancelManualRefine() {
+    _keyRepeat.stop();
     if (_manualSession == null) return;
     final notifier = ref.read(replaceEditorProvider(widget.trackId).notifier);
     _pauseManualRefinePlayback(notifier);
-    setState(() => _manualSession = null);
+    setState(() {
+      _manualSession = null;
+      _manualDraftChanged = false;
+    });
+  }
+
+  void _clearManualHooks() {
+    final notifier = _manualNotifier;
+    if (notifier != null) {
+      notifier.pendingManualDirty = null;
+      notifier.commitManualDraft = null;
+      notifier.discardManualDraft = null;
+    }
+    _manualNotifier = null;
+  }
+
+  void _commitManualDraftBeforeSave(ReplaceEditorNotifier notifier) {
+    final session = _manualSession;
+    if (!mounted || session == null || !_manualDraftChanged) return;
+    final wasOpen = _savePromptOpen;
+    _savePromptOpen = true;
+    try {
+      if (session.kind.isLoop) {
+        notifier.applyManualLoop(session.kind, session.start, session.end);
+      } else {
+        notifier.applyManualPoint(session.kind, session.pointTime);
+      }
+      _pauseManualRefinePlayback(notifier);
+      setState(() {
+        _manualSession = null;
+        _manualDraftChanged = false;
+      });
+    } finally {
+      _savePromptOpen = wasOpen;
+    }
   }
 
   void _pauseManualRefinePlayback(ReplaceEditorNotifier notifier) {
@@ -804,6 +1204,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   }
 
   void _previewManualAudition(ReplaceEditorNotifier notifier) {
+    TimeInputValidation.flush();
     final session = _manualSession;
     if (session == null) return;
     final state = _manualPreviewState(
@@ -841,6 +1242,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   }
 
   void _confirmManualRefine(ReplaceEditorNotifier notifier) {
+    _keyRepeat.stop();
+    TimeInputValidation.flush();
+    if (TimeInputValidation.invalid.isNotEmpty) return;
     final session = _manualSession;
     if (session == null) return;
     if (session.kind.isLoop) {
@@ -849,7 +1253,10 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       notifier.applyManualPoint(session.kind, session.pointTime);
     }
     _pauseManualRefinePlayback(notifier);
-    setState(() => _manualSession = null);
+    setState(() {
+      _manualSession = null;
+      _manualDraftChanged = false;
+    });
     _scheduleSavePromptIfNeeded(
       ref.read(replaceEditorProvider(widget.trackId)),
     );
@@ -879,7 +1286,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       );
     }
     final updated = working.placeAt(next, duration: state.ai.durationSec);
-    setState(() => _manualSession = updated);
+    _updateManualDraft(updated, coalesce: isMove);
     unawaited(
       _seekTo(
         state,
@@ -913,7 +1320,11 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       candidate,
       duration: state.ai.durationSec,
     );
-    setState(() => _manualSession = updated);
+    _manualSuggestionCursor = _manualSuggestions(
+      state,
+      session.kind,
+    ).indexWhere(updated.matches);
+    _updateManualDraft(updated, coalesce: _repeatKey != null);
     if (updated.kind.isLoop) {
       if (widget.enableAudio) {
         unawaited(
@@ -950,9 +1361,30 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     setState(() => _manualSession = session.copyWith(activeTarget: target));
   }
 
-  void _nudgeManualDraft(double deltaSec) {
+  void _nudgeManualDraft(double deltaSec, {bool moveLoop = false}) {
     final session = _manualSession;
     if (session == null) return;
+    if (moveLoop && session.kind.isLoop) {
+      final state = ref.read(replaceEditorProvider(widget.trackId));
+      // Clamp a single shared delta, preserving the exact loop duration at boundaries.
+      final delta = deltaSec.clamp(
+        -session.start,
+        math.max(0.0, state.ai.durationSec - session.end),
+      );
+      final updated = session.copyWith(
+        start: session.start + delta,
+        end: session.end + delta,
+      );
+      _updateManualDraft(updated, coalesce: _repeatKey != null);
+      unawaited(
+        _seekTo(
+          state,
+          ref.read(replaceEditorProvider(widget.trackId).notifier),
+          updated.focusTime,
+        ),
+      );
+      return;
+    }
     _nudgeManualDraftTarget(session.activeTarget, deltaSec);
   }
 
@@ -965,7 +1397,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       deltaSec,
       duration: state.ai.durationSec,
     );
-    setState(() => _manualSession = updated);
+    _updateManualDraft(updated, coalesce: _repeatKey != null);
     unawaited(
       _seekTo(
         state,
@@ -1004,6 +1436,12 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
               scrollController: _pageScrollController,
               onExtraExtentChanged: _setSidePanelExtraScroll,
               child: EditorSidePanel(
+                manualOnly: ProviderScope.containerOf(
+                  context,
+                ).read(editorOptionsProvider).manualOnly,
+                seamless: ProviderScope.containerOf(
+                  context,
+                ).read(editorOptionsProvider).slmEnabled,
                 state: s,
                 analysis: analysis,
                 onAnalyze: () => unawaited(n.analyze(force: true)),
@@ -1065,10 +1503,21 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         onSeek: (value) => unawaited(_seekTo(s, n, value)),
         onZoomIn: n.zoomIn,
         onZoomOut: n.zoomOut,
+        onWheelZoom: n.zoomByFactor,
       ),
       transport: _transportBar(s, n, floating: false),
       after: [
-        if (s.aiPending)
+        if (ref.watch(editorOptionsProvider).manualOnly)
+          RmBanner(
+            kind: RmBannerKind.info,
+            title: ref.watch(editorOptionsProvider).slmEnabled
+                ? '手动精调 + 循环建议'
+                : '手动精调模式',
+            body: ref.watch(editorOptionsProvider).slmEnabled
+                ? '未运行 AI 模型；SeamlessLoopMusic 循环建议在人工精修右侧，试听确认后保存。'
+                : '未运行 AI；可直接输入时间或在真实波形上选点。',
+          )
+        else if (s.aiPending)
           const RmBanner(
             kind: RmBannerKind.info,
             title: 'AI 候选生成中。',
@@ -1109,6 +1558,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       onTogglePlay: () => unawaited(_togglePlayback(s, n)),
       onRewind: () => unawaited(_seekTo(s, n, 0)),
       onSkipFwd: () => unawaited(_seekTo(s, n, s.ai.durationSec)),
+      trailing: const AuditionSettingsButton(),
     );
   }
 
@@ -1120,7 +1570,43 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     bool low, {
     required bool pending,
   }) {
+    final globalSync = ref.watch(editorOptionsProvider).syncPostLoop;
     final card = TimeGroupCard(
+      postLoopSyncNotice: kind != GroupKind.pl
+          ? null
+          : globalSync
+          ? (n.postLoopSyncPaused
+                ? '本曲已临时暂停 PL 同步 TL'
+                : 'PL 正在自动同步 TL 的时间与确认状态')
+          : null,
+      postLoopSyncLabel: kind != GroupKind.pl
+          ? null
+          : globalSync
+          ? (n.postLoopSyncPaused ? '恢复自动同步' : '临时取消同步')
+          : '一键同步 TL',
+      onPostLoopSync: kind != GroupKind.pl
+          ? null
+          : () {
+              if (globalSync) {
+                n.setPostLoopSyncPaused(!n.postLoopSyncPaused);
+              } else {
+                n.syncPostLoopFromTrackLoop();
+              }
+            },
+      hideCandidates: true,
+      onManualDoubleTap: () {
+        if (ref.read(replaceEditorProvider(widget.trackId)).confirmedOf(kind)) {
+          n.setConfirmed(kind, false);
+        }
+        _openManualRefine(
+          ref.read(replaceEditorProvider(widget.trackId)),
+          n,
+          kind,
+        );
+      },
+      manualOnly:
+          ref.watch(editorOptionsProvider).manualOnly ||
+          (ref.watch(editorOptionsProvider).slmEnabled && kind.isLoop),
       kind: kind,
       candidates: candidates,
       selectedIdx: s.selectedIdxOf(kind),
@@ -1141,6 +1627,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         ),
       ),
       onNudge: (target, deltaSec) => n.nudge(kind, target, deltaSec),
+      onTimeEdited: (target, seconds) => n.editTime(kind, target, seconds),
+      onPreviewCurrent: () => unawaited(
+        _previewCandidate(s, n, kind, switch (kind) {
+          GroupKind.td => s.td,
+          GroupKind.pd => s.pd,
+          GroupKind.tl => s.tl,
+          GroupKind.pl => s.pl,
+        }),
+      ),
       bpm: s.ai.bpm,
     );
     return AiPendingGate(
@@ -1219,14 +1714,24 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   }) async {
     final player = _audioPlayer;
     try {
+      await player.setVolume(
+        Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] == '1'
+            ? 0
+            : ref.read(auditionPreferencesProvider).volume,
+      );
       _loadedSource = null;
       await _clearNativePreviewBounds(player);
-      await player.stop();
-      final media = Media(
-        Uri.file(source).toString(),
-        start: initialStartSec == null ? null : _duration(initialStartSec),
-      );
-      await player.open(media, play: false);
+      if (StudioAudioPlayers.editorSource == source) {
+        await player.pause();
+        await player.seek(_duration(initialStartSec ?? 0));
+      } else {
+        final media = Media(
+          Uri.file(source).toString(),
+          start: initialStartSec == null ? null : _duration(initialStartSec),
+        );
+        await player.open(media, play: false);
+        StudioAudioPlayers.editorSource = source;
+      }
       if (loadToken != _loadVersion) return;
       _loadedSource = source;
       _pausedByUser = false;
@@ -1249,6 +1754,8 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   }
 
   void _clearLocalPlaybackState() {
+    unawaited(_seamAudition?.cancel());
+    _seamAudition = null;
     _playbackVersion++;
     _loadVersion++;
     _loadedSource = null;
@@ -1265,11 +1772,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
 
   void _startInitialAnalysis() {
     final s = ref.read(replaceEditorProvider(widget.trackId));
-    if (!s.track.id.startsWith('real:') || !s.analyzing) return;
+    if (!s.track.id.startsWith('real:')) return;
     if (_analysisStartedFor == s.track.id) return;
     _analysisStartedFor = s.track.id;
     final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
-    unawaited(n.analyze());
+    if (s.analyzing && !ref.read(editorOptionsProvider).manualOnly) {
+      unawaited(n.analyze());
+    } else {
+      unawaited(n.loadWaveform());
+    }
   }
 
   Future<void> _warmUpAudio() async {
@@ -1317,6 +1828,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       );
       return;
     }
+    await _seamAudition?.cancel();
+    if (!_isCurrentPlaybackCommand(command)) return;
+    _seamAudition = null;
     _previewRange = null;
     _rangeSeeking = false;
     final restartAtEnd = s.playhead >= s.ai.durationSec - 0.05;
@@ -1335,6 +1849,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     double seconds,
   ) async {
     final command = _beginPlaybackCommand();
+    await _seamAudition?.cancel();
+    if (!_isCurrentPlaybackCommand(command)) return;
+    _seamAudition = null;
     final next = seconds.clamp(0, s.ai.durationSec).toDouble();
     n.setPlayhead(next);
     _previewRange = null;
@@ -1362,6 +1879,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   ) async {
     if (!widget.enableAudio) return;
     final command = _beginPlaybackCommand();
+    await _seamAudition?.cancel();
+    if (!_isCurrentPlaybackCommand(command)) return;
+    _seamAudition = null;
     final window = pointPreviewWindowForTesting(
       timeSec: timeSec,
       durationSec: _previewDuration(s, timeSec + pointPreviewDurationSec),
@@ -1401,13 +1921,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
   ) async {
     if (!widget.enableAudio) return;
     final command = _beginPlaybackCommand();
+    await _seamAudition?.cancel();
+    if (!_isCurrentPlaybackCommand(command)) return;
+    _seamAudition = null;
     final duration = _previewDuration(s, math.max(startSec, endSec));
     final start = startSec.clamp(0, duration).toDouble();
-    final end = endSec.clamp(start + 0.1, duration).toDouble();
-    final auditionStart = loopPreviewAuditionStartForTesting(
-      startSec: start,
-      endSec: end,
-    );
+    if (endSec <= start) return;
+    final end = endSec.clamp(start + .1, duration).toDouble();
+    final options = ref.read(auditionPreferencesProvider);
+    final auditionStart = (end - options.before).clamp(start, end).toDouble();
     _preparePreviewStartup(
       command,
       n,
@@ -1427,15 +1949,28 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       _cancelPreviewStartup(command);
       return;
     }
-    if (!await _startPreviewPlayback(
-      command,
-      player,
-      auditionStart,
-      loopBounds: (start: start, end: end),
-    )) {
-      return;
-    }
-    n.setPlayback(PlaybackMode.loopPreview, playing: true);
+    late final SeamAuditionPlayer audition;
+    audition = SeamAuditionPlayer(
+      player: player,
+      start: start,
+      end: end,
+      options: options,
+      muted: Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] == '1',
+      isCurrent: () => mounted && identical(_seamAudition, audition),
+      onDone: () {
+        if (!mounted) return;
+        _previewRange = null;
+        _seamAudition = null;
+        n.setPlayback(PlaybackMode.idle, playing: false);
+      },
+      onError: (error) {
+        if (mounted) n.setError('循环试听失败：$error');
+      },
+    );
+    _seamAudition = audition;
+    await audition.start();
+    if (!_isCurrentPlaybackCommand(command)) return;
+    n.setPlayback(PlaybackMode.loopPreview, playing: player.state.playing);
   }
 
   double _previewDuration(ReplaceEditorState s, double minimum) {
@@ -1478,6 +2013,17 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     await Future<void>.delayed(Duration.zero);
     if (!_isCurrentPlaybackCommand(command)) return false;
     await player.play();
+    if (Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] == '1') {
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 600), () {
+          if (_isCurrentPlaybackCommand(command)) {
+            debugPrint(
+              'EDITOR_PREVIEW expected=$seconds actual=${player.state.position.inMilliseconds / 1000} playing=${player.state.playing}',
+            );
+          }
+        }),
+      );
+    }
     return _isCurrentPlaybackCommand(command);
   }
 
@@ -1488,6 +2034,10 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     if (_ignoreStalePreviewPosition(seconds)) return;
     final range = _previewRange;
     final player = _player;
+    if (_seamAudition?.active == true) {
+      n.setPlayhead(seconds);
+      return;
+    }
     if (range != null && player?.state.playing != true) {
       n.setPlayhead(seconds);
       return;
@@ -1677,17 +2227,27 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     }
   }
 
-  void _saveConfig(
+  bool _saveConfig(
     BuildContext context,
     ReplaceEditorNotifier n, {
     required String title,
     bool export = false,
   }) {
-    n.saveToProject();
-    if (!context.mounted) return;
+    try {
+      n.saveToProject();
+    } on Object catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$error')));
+      }
+      return false;
+    }
+    if (!context.mounted) return false;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(export ? '已导出配置：$title' : '已保存配置：$title')),
     );
+    return true;
   }
 
   void _scheduleSavePromptIfNeeded(ReplaceEditorState state) {
@@ -1701,14 +2261,17 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       }
       final save = await _showSaveConfigDialog(context, state);
       _savePromptOpen = false;
-      if (!mounted || save != true) return;
+      if (!mounted || (save != 'save' && save != 'assign')) return;
       final current = ref.read(replaceEditorProvider(widget.trackId));
       if (_matchesSavedTimingConfig(current)) return;
-      _saveConfig(
+      final ok = _saveConfig(
         context,
         ref.read(replaceEditorProvider(widget.trackId).notifier),
         title: current.track.title,
       );
+      if (ok && save == 'assign' && mounted) {
+        await showQuickAssign(context, current.track);
+      }
     });
   }
 
@@ -1729,11 +2292,11 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     return true;
   }
 
-  Future<bool?> _showSaveConfigDialog(
+  Future<String?> _showSaveConfigDialog(
     BuildContext context,
     ReplaceEditorState state,
   ) {
-    return showDialog<bool>(
+    return showDialog<String>(
       context: context,
       barrierColor: RmTokens.modalBackdrop,
       builder: (context) {
@@ -1804,19 +2367,26 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
                   decoration: BoxDecoration(
                     border: Border(top: BorderSide(color: rm.border)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       RmButton(
-                        onPressed: () => Navigator.of(context).pop(false),
+                        onPressed: () => Navigator.of(context).pop('cancel'),
                         label: '暂不保存',
                       ),
                       const SizedBox(width: 10),
                       RmButton(
-                        onPressed: () => Navigator.of(context).pop(true),
+                        onPressed: () => Navigator.of(context).pop('save'),
                         variant: RmButtonVariant.primary,
                         leading: const RmIcon('check', size: 12),
                         label: '保存配置',
+                      ),
+                      RmButton(
+                        label: '保存并分配电台',
+                        variant: RmButtonVariant.primary,
+                        onPressed: () => Navigator.of(context).pop('assign'),
                       ),
                     ],
                   ),
@@ -2229,6 +2799,12 @@ class _FloatingSideDrawer extends StatelessWidget {
             borderRadius: radius,
             child: SingleChildScrollView(
               child: EditorSidePanel(
+                manualOnly: ProviderScope.containerOf(
+                  context,
+                ).read(editorOptionsProvider).manualOnly,
+                seamless: ProviderScope.containerOf(
+                  context,
+                ).read(editorOptionsProvider).slmEnabled,
                 state: state,
                 analysis: analysis,
                 onAnalyze: onAnalyze,
@@ -2309,13 +2885,15 @@ class _ManualRefineWideBodyState extends State<_ManualRefineWideBody> {
   }
 }
 
-class _ManualRefineOverlay extends StatelessWidget {
+class _ManualRefineOverlay extends StatefulWidget {
   const _ManualRefineOverlay({
     super.key,
     required this.state,
     required this.session,
     required this.viewport,
+    required this.preferredWidth,
     required this.aiCandidates,
+    this.seamless = false,
     required this.snapActive,
     required this.onPlace,
     required this.onApplyCandidate,
@@ -2323,6 +2901,8 @@ class _ManualRefineOverlay extends StatelessWidget {
     required this.onNudge,
     required this.onAudition,
     required this.onCancel,
+    required this.onUndo,
+    required this.shortcutHint,
     required this.onConfirm,
     required this.onTogglePlay,
     required this.onRewind,
@@ -2332,7 +2912,9 @@ class _ManualRefineOverlay extends StatelessWidget {
   final ReplaceEditorState state;
   final _ManualRefineSession session;
   final BoxConstraints viewport;
+  final double preferredWidth;
   final List<dynamic> aiCandidates;
+  final bool seamless;
 
   /// 磁吸到拍是否生效（按住 Alt 时为 false）。
   final bool snapActive;
@@ -2342,16 +2924,73 @@ class _ManualRefineOverlay extends StatelessWidget {
   final void Function(FineTarget target, double deltaSec) onNudge;
   final VoidCallback onAudition;
   final VoidCallback onCancel;
+  final VoidCallback? onUndo;
+  final String shortcutHint;
   final VoidCallback onConfirm;
   final VoidCallback onTogglePlay;
   final VoidCallback onRewind;
   final VoidCallback onSkipFwd;
 
   @override
+  State<_ManualRefineOverlay> createState() => _ManualRefineOverlayState();
+}
+
+class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
+  ReplaceEditorState get state => widget.state;
+  _ManualRefineSession get session => widget.session;
+  BoxConstraints get viewport => widget.viewport;
+  List<dynamic> get aiCandidates => widget.aiCandidates;
+  bool get snapActive => widget.snapActive;
+  void Function(double seconds, {required bool isMove}) get onPlace =>
+      widget.onPlace;
+  ValueChanged<dynamic> get onApplyCandidate => widget.onApplyCandidate;
+  ValueChanged<FineTarget> get onPickTarget => widget.onPickTarget;
+  void Function(FineTarget target, double deltaSec) get onNudge =>
+      widget.onNudge;
+  VoidCallback get onAudition => widget.onAudition;
+  VoidCallback get onCancel => widget.onCancel;
+  VoidCallback get onConfirm => widget.onConfirm;
+  VoidCallback get onTogglePlay => widget.onTogglePlay;
+  VoidCallback get onRewind => widget.onRewind;
+  VoidCallback get onSkipFwd => widget.onSkipFwd;
+  bool get seamless => widget.seamless;
+  double _zoomStart = 0;
+  double? _zoomEnd;
+  @override
+  void didUpdateWidget(covariant _ManualRefineOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (state.playing && _zoomEnd != null) {
+      final view = pagedPlaybackWindow(
+        duration: state.ai.durationSec,
+        start: _zoomStart,
+        end: _zoomEnd!,
+        playhead: state.playhead,
+      );
+      _zoomStart = view.start;
+      _zoomEnd = view.end;
+    }
+  }
+
+  void _zoom(double factor) {
+    final duration = state.ai.durationSec;
+    if (duration <= 0) return;
+    final span = ((_zoomEnd ?? duration) - _zoomStart) * factor;
+    final width = span.clamp(math.min(8.0, duration), duration).toDouble();
+    final center = state.playing ? state.playhead : session.focusTime;
+    setState(() {
+      _zoomStart = (center - width / 2).clamp(0.0, duration - width);
+      _zoomEnd = _zoomStart + width;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final rm = context.rm;
-    final width = math.min(1080.0, math.max(0.0, viewport.maxWidth - 48));
-    final height = math.min(680.0, math.max(0.0, viewport.maxHeight - 48));
+    final width = math.min(
+      widget.preferredWidth,
+      math.max(0.0, viewport.maxWidth - 48),
+    );
+    final height = math.min(724.0, math.max(0.0, viewport.maxHeight - 48));
     final compact = width < 860;
 
     return Stack(
@@ -2467,6 +3106,11 @@ class _ManualRefineOverlay extends StatelessWidget {
   }
 
   Widget _wideBody(BuildContext context) {
+    if (aiCandidates.isEmpty) {
+      return SingleChildScrollView(
+        child: _mainEditor(context, scrollable: false),
+      );
+    }
     // 左侧自然高度决定右侧 AI panel 高度：少候选时撑满，多候选时内部滚动。
     return SingleChildScrollView(
       child: _ManualRefineWideBody(
@@ -2483,8 +3127,10 @@ class _ManualRefineOverlay extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _mainEditor(context, scrollable: false),
-          const SizedBox(height: 12),
-          SizedBox(height: 260, child: _aiApplyPanel(context)),
+          if (aiCandidates.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SizedBox(height: 260, child: _aiApplyPanel(context)),
+          ],
         ],
       ),
     );
@@ -2497,14 +3143,31 @@ class _ManualRefineOverlay extends StatelessWidget {
       children: [
         _focusWaveform(context),
         const SizedBox(height: 10),
-        TransportBar(
-          state: state,
-          aiPending: false,
-          onTogglePlay: onTogglePlay,
-          onRewind: onRewind,
-          onSkipFwd: onSkipFwd,
-          compact: true,
-          trailing: _transportTrailing(context),
+        LayoutBuilder(
+          builder: (context, c) {
+            final separateControls = c.maxWidth < 760;
+            final transport = TransportBar(
+              state: state,
+              aiPending: false,
+              onTogglePlay: onTogglePlay,
+              onRewind: onRewind,
+              onSkipFwd: onSkipFwd,
+              compact: true,
+              trailing: separateControls ? null : _transportTrailing(context),
+            );
+            if (!separateControls) return transport;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                transport,
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _transportTrailing(context),
+                ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 10),
         _finePanel(context),
@@ -2560,19 +3223,66 @@ class _ManualRefineOverlay extends StatelessWidget {
         borderRadius: BorderRadius.circular(RmTokens.rLg),
       ),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-      child: ManualFocusWaveform(
-        bars: bars,
-        beats: ai.beats,
-        segments: ai.segments,
-        duration: ai.durationSec,
-        accent: acc.base,
-        handles: handles,
-        free: !snapActive,
-        locked: false,
-        playhead: state.playing || state.playbackMode != PlaybackMode.idle
-            ? state.playhead
-            : null,
-        onPlace: onPlace,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  "${formatEditorTimecode(_zoomStart)} – ${formatEditorTimecode(_zoomEnd ?? ai.durationSec)}",
+                  style: RmText.mono(10.5, color: rm.fg3),
+                ),
+              ),
+              Text('Ctrl + 滚轮缩放', style: RmText.sans(10, color: rm.fg3)),
+              const SizedBox(width: 8),
+              RmButton.icon(
+                key: const ValueKey("manual-zoom-out"),
+                icon: const RmIcon("zoom-out", size: 12),
+                tooltip: "缩小波形",
+                onPressed: () => _zoom(1.55),
+              ),
+              const SizedBox(width: 6),
+              RmButton.icon(
+                key: const ValueKey("manual-zoom-in"),
+                icon: const RmIcon("zoom-in", size: 12),
+                tooltip: "放大波形",
+                onPressed: () => _zoom(0.65),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ManualFocusWaveform(
+            bars: bars,
+            beats: ai.beats,
+            segments: ai.segments,
+            duration: ai.durationSec,
+            onZoom: _zoom,
+            windowStart: _zoomStart,
+            windowEnd: _zoomEnd,
+            accent: acc.base,
+            handles: handles,
+            free: !snapActive,
+            locked: false,
+            playhead: state.playing || state.playbackMode != PlaybackMode.idle
+                ? state.playhead
+                : null,
+            onPlace: onPlace,
+          ),
+          const SizedBox(height: 8),
+          WaveformOverview(
+            key: const ValueKey('manual-waveform-overview'),
+            bars: bars,
+            duration: ai.durationSec,
+            windowStart: _zoomStart,
+            windowEnd: _zoomEnd ?? ai.durationSec,
+            onWindowStart: (start) => setState(() {
+              final span = (_zoomEnd ?? ai.durationSec) - _zoomStart;
+              _zoomStart = start;
+              _zoomEnd = start + span;
+            }),
+          ),
+        ],
       ),
     );
   }
@@ -2582,6 +3292,8 @@ class _ManualRefineOverlay extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _manualAuditionButton(context),
+        const SizedBox(width: 6),
+        const AuditionSettingsButton(compact: true),
         if (session.kind.isLoop) ...[
           const SizedBox(width: 8),
           _endpointToggle(context),
@@ -2719,25 +3431,46 @@ class _ManualRefineOverlay extends StatelessWidget {
           // 单行：标签在左 · 大时间码居中 · 微调按钮成组靠右。
           child: Row(
             children: [
-              SizedBox(width: 104, child: _fineLabel(context, label, active)),
+              SizedBox(
+                width: 154,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _fineLabel(context, label, active),
+                    const SizedBox(height: 4),
+                    Text(
+                      '= ${formatSamples(value, sampleRate)} samples',
+                      style: RmText.mono(10, color: rm.fg4),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      _formatManualFineTimecode(value),
-                      style: RmText.mono(
-                        22,
-                        weight: FontWeight.w700,
-                        color: rm.fg,
-                      ),
+                    TimeInputField(
+                      key: ValueKey('manual-time-${target.name}'),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      textAlign: TextAlign.center,
+                      seconds: value,
+                      onCommit: (seconds) {
+                        if (seconds > state.ai.durationSec) {
+                          throw const FormatException('时间必须位于歌曲范围内');
+                        }
+                        if (session.kind.isLoop &&
+                            (target == FineTarget.loopStart
+                                ? seconds >= session.end
+                                : seconds <= session.start)) {
+                          throw const FormatException('循环结束必须晚于开始');
+                        }
+                        onNudge(target, seconds - value);
+                      },
                     ),
                     const SizedBox(height: 1),
-                    Text(
-                      '= ${formatSamples(value, sampleRate)} samples',
-                      style: RmText.mono(11, color: rm.fg4),
-                    ),
                   ],
                 ),
               ),
@@ -2766,12 +3499,16 @@ class _ManualRefineOverlay extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         RmButton(
+          repeat: true,
+          tooltip: '长按约 0.5 秒后连续调整，松开即停止',
           onPressed: () => onNudge(target, -delta),
           size: RmButtonSize.sm,
           label: minus,
         ),
         const SizedBox(width: 4),
         RmButton(
+          repeat: true,
+          tooltip: '长按约 0.5 秒后连续调整，松开即停止',
           onPressed: () => onNudge(target, delta),
           size: RmButtonSize.sm,
           label: plus,
@@ -2847,7 +3584,7 @@ class _ManualRefineOverlay extends StatelessWidget {
                 _meta(
                   context,
                   'Δ',
-                  '${(session.end - session.start).toStringAsFixed(2)}s',
+                  '${(session.end - session.start).toStringAsFixed(3)}s',
                 ),
             ],
           ),
@@ -2895,7 +3632,7 @@ class _ManualRefineOverlay extends StatelessWidget {
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
-                    '套用 AI 建议',
+                    seamless ? '套用循环建议' : '套用 AI 建议',
                     style: RmText.sans(
                       13,
                       weight: FontWeight.w700,
@@ -2927,7 +3664,9 @@ class _ManualRefineOverlay extends StatelessWidget {
               border: Border(top: BorderSide(color: rm.border)),
             ),
             child: Text(
-              '套用后仍可继续点波形或微调；AI 只是起点。',
+              seamless
+                  ? 'SeamlessLoopMusic 衔接匹配；套用后请试听，仍可手动微调。'
+                  : '套用后仍可继续点波形或微调；AI 只是起点。',
               style: RmText.sans(11.5, color: rm.fg3, height: 1.3),
             ),
           ),
@@ -2997,14 +3736,16 @@ class _ManualRefineOverlay extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  '${formatTimecode(candidate.start)} → ${formatTimecode(candidate.end)}',
+                  '${formatEditorTimecode(candidate.start)} → ${formatEditorTimecode(candidate.end)}',
                   style: RmText.mono(13, weight: FontWeight.w700, color: rm.fg),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               Text(
-                '${candidate.bars} 小节',
+                seamless
+                    ? '${(candidate.end - candidate.start).toStringAsFixed(1)} s'
+                    : '${candidate.bars} 小节',
                 style: RmText.mono(9.5, color: rm.fg4),
               ),
             ],
@@ -3017,7 +3758,10 @@ class _ManualRefineOverlay extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 4),
-          _confidenceBar(context, candidate.score),
+          if (seamless && !candidate.why.startsWith('SeamlessLoopMusic'))
+            Text('当前点位 · 未评估衔接', style: RmText.sans(10.5, color: rm.fg4))
+          else
+            _confidenceBar(context, candidate.score),
         ],
       );
     }
@@ -3026,7 +3770,7 @@ class _ManualRefineOverlay extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          formatTimecode(point.t),
+          formatEditorTimecode(point.t),
           style: RmText.mono(13, weight: FontWeight.w700, color: rm.fg),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -3099,14 +3843,48 @@ class _ManualRefineOverlay extends StatelessWidget {
               RmIcon('info', size: 14, color: rm.fg3),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  '←/→ 1拍 · Shift+←/→ 10ms · Ctrl+←/→ 1ms · Alt 自由放置 · Enter 确认 · Esc 取消',
-                  style: RmText.sans(12.5, color: rm.fg3),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final hints in [
+                      widget.shortcutHint.split(' · ').take(4),
+                      widget.shortcutHint.split(' · ').skip(4),
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            for (final hint in hints)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: rm.raised,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  hint,
+                                  style: RmText.sans(11, color: rm.fg2),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(width: 12),
+              RmButton(
+                onPressed: widget.onUndo,
+                label: '撤销',
+                tooltip: '撤销本次精修操作',
+              ),
+              const SizedBox(width: 8),
               RmButton(onPressed: onCancel, label: '取消'),
               const SizedBox(width: 10),
               RmButton(
@@ -3331,18 +4109,6 @@ class _ManualRefineSession {
 int _barsForManual(double start, double end, double bpm) {
   final beat = bpm <= 0 ? 0.5 : 60 / bpm;
   return ((end - start) / beat / 4).round().clamp(1, 128).toInt();
-}
-
-String _formatManualFineTimecode(double seconds) {
-  final neg = seconds < 0;
-  final totalMs = (seconds.abs() * 1000).round();
-  final minutes = totalMs ~/ 60000;
-  final secondsMs = totalMs % 60000;
-  final wholeSeconds = secondsMs ~/ 1000;
-  final milliseconds = secondsMs % 1000;
-  return '${neg ? "-" : ""}$minutes:'
-      '${wholeSeconds.toString().padLeft(2, "0")}.'
-      '${milliseconds.toString().padLeft(3, "0")}';
 }
 
 class _PreviewRange {

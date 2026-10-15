@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path/path.dart' as p;
 import 'package:fh_radio_studio/core/siren_audio_cache.dart';
+import 'package:fh_radio_studio/core/project_workspace.dart';
 import 'package:fh_radio_studio/core/siren_catalog.dart';
 import 'package:fh_radio_studio/screens/siren_library.dart';
 import 'package:fh_radio_studio/state/app_state.dart';
@@ -48,6 +49,7 @@ void main() {
       if (project.existsSync()) project.deleteSync(recursive: true);
     });
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -102,6 +104,7 @@ void main() {
       if (project.existsSync()) project.deleteSync(recursive: true);
     });
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -300,6 +303,7 @@ void main() {
       if (project.existsSync()) project.deleteSync(recursive: true);
     });
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -392,6 +396,7 @@ void main() {
     });
 
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     var showSiren = true;
     StateSetter? hostSetState;
@@ -472,6 +477,7 @@ void main() {
     final cacheRelease = Completer<void>();
 
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -580,6 +586,7 @@ void main() {
       ..writeAsBytesSync([1, 2, 3]);
 
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -668,6 +675,7 @@ void main() {
       ..writeAsBytesSync([1, 2, 3]);
 
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -753,6 +761,7 @@ void main() {
       final cacheRelease = Completer<void>();
 
       SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+      FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
       final prefs = await SharedPreferences.getInstance();
       var showSiren = true;
       StateSetter? hostSetState;
@@ -853,6 +862,7 @@ void main() {
       if (project.existsSync()) project.deleteSync(recursive: true);
     });
     SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
     final prefs = await SharedPreferences.getInstance();
     await tester.pumpWidget(
       ProviderScope(
@@ -897,88 +907,86 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'capture Siren library route with Flutter render tree',
-    (tester) async {
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
-      final client = _FakeSirenClient.large();
+  testWidgets('capture Siren library route with Flutter render tree', (
+    tester,
+  ) async {
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
+    final client = _FakeSirenClient.large();
 
-      await _captureSiren(
-        tester,
-        client: _PendingSirenClient(),
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'siren_loading_regular.png'),
-      );
-      await _captureSiren(
-        tester,
-        client: _PendingSirenClient(),
-        logicalSize: const Size(1365, 1500),
-        outputPath: p.join(outDir.path, 'siren_loading_full.png'),
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'siren_regular.png'),
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'siren_queue_regular.png'),
-        queueFirstTrack: true,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'siren_importing_regular.png'),
-        importingQueueOverlay: true,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'siren_tooltip_regular.png'),
-        showPlayTooltip: true,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(860, 900),
-        outputPath: p.join(outDir.path, 'siren_narrow_rail_scrolled.png'),
-        albumRailScrollOffset: 360,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 1500),
-        outputPath: p.join(outDir.path, 'siren_full.png'),
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 1500),
-        outputPath: p.join(outDir.path, 'siren_importing_full.png'),
-        importingQueueOverlay: true,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(1365, 1500),
-        outputPath: p.join(outDir.path, 'siren_tooltip_full.png'),
-        showPlayTooltip: true,
-      );
-      await _captureSiren(
-        tester,
-        client: client,
-        logicalSize: const Size(860, 1400),
-        outputPath: p.join(outDir.path, 'siren_narrow.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_SIREN'] != '1',
-  );
+    await _captureSiren(
+      tester,
+      client: _PendingSirenClient(),
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'siren_loading_regular.png'),
+    );
+    await _captureSiren(
+      tester,
+      client: _PendingSirenClient(),
+      logicalSize: const Size(1365, 1500),
+      outputPath: p.join(outDir.path, 'siren_loading_full.png'),
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'siren_regular.png'),
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'siren_queue_regular.png'),
+      queueFirstTrack: true,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'siren_importing_regular.png'),
+      importingQueueOverlay: true,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'siren_tooltip_regular.png'),
+      showPlayTooltip: true,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(860, 900),
+      outputPath: p.join(outDir.path, 'siren_narrow_rail_scrolled.png'),
+      albumRailScrollOffset: 360,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 1500),
+      outputPath: p.join(outDir.path, 'siren_full.png'),
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 1500),
+      outputPath: p.join(outDir.path, 'siren_importing_full.png'),
+      importingQueueOverlay: true,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(1365, 1500),
+      outputPath: p.join(outDir.path, 'siren_tooltip_full.png'),
+      showPlayTooltip: true,
+    );
+    await _captureSiren(
+      tester,
+      client: client,
+      logicalSize: const Size(860, 1400),
+      outputPath: p.join(outDir.path, 'siren_narrow.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_SIREN'] != '1');
 }
 
 Future<void> _loadTestFonts() async {
@@ -1090,6 +1098,7 @@ Future<void> _captureSiren(
     if (project.existsSync()) project.deleteSync(recursive: true);
   });
   SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
+  FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
   final prefs = await SharedPreferences.getInstance();
   final cacheRelease = Completer<void>();
   final cachedFile = File(p.join(project.path, 'cached.wav'));

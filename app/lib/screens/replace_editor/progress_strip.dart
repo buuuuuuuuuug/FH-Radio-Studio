@@ -1,3 +1,4 @@
+import 'editor_timecode.dart';
 import 'package:flutter/material.dart';
 
 import '../../domain/replacement_models.dart';
@@ -21,27 +22,27 @@ class ProgressStrip extends StatelessWidget {
         kind: GroupKind.td,
         label: 'TrackDrop · 比赛开始',
         confirmed: state.tdConfirmed,
-        value: formatTimecode(state.td.t),
+        value: formatEditorTimecode(state.td.t),
       ),
       _Cell(
         kind: GroupKind.pd,
         label: 'PostDrop · 冲线后',
         confirmed: state.pdConfirmed,
-        value: formatTimecode(state.pd.t),
+        value: formatEditorTimecode(state.pd.t),
       ),
       _Cell(
         kind: GroupKind.tl,
         label: 'TrackLoop · 比赛循环',
         confirmed: state.tlConfirmed,
         value:
-            '${formatTimecode(state.tl.start)} → ${formatTimecode(state.tl.end)}',
+            '${formatEditorTimecode(state.tl.start)} → ${formatEditorTimecode(state.tl.end)}',
       ),
       _Cell(
         kind: GroupKind.pl,
         label: 'PostLoop · 冲线循环',
         confirmed: state.plConfirmed,
         value:
-            '${formatTimecode(state.pl.start)} → ${formatTimecode(state.pl.end)}',
+            '${formatEditorTimecode(state.pl.start)} → ${formatEditorTimecode(state.pl.end)}',
       ),
     ];
 

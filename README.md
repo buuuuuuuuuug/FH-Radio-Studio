@@ -197,3 +197,9 @@ GitHub Actions 也会自动发版：`main` 可以保持当前版本的 RC 号，
 ## 文档入口
 
 - `docs/development.md`：公开开发文档，覆盖本地环境、CLI/App 工作流、测试和 release 构建。
+
+## Studio editing and playlist improvements
+
+See [editing, layout and timing transfer](docs/studio-features.md) for the current
+workflow and [submission review](docs/submission-review.md) for validation scope.
+Run the complete local checks with `tools/check_submission.ps1` before submitting.

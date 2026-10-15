@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-const appDisplayName = 'FH Radio Studio';
-const fallbackAppReleaseId = '0.2.1-rc.1';
+const appDisplayName = 'FH Radio Studio · 循环分析实验版';
+const fallbackAppReleaseId = '0.2.1-rc.1+75';
 const noneBuildCommitSha256 = 'None';
 
 const _definedReleaseId = String.fromEnvironment('FH_RADIO_STUDIO_RELEASE_ID');
@@ -63,8 +63,11 @@ class AppInfo {
 }
 
 String fhRadioStudioUserAgent([String? suffix]) {
-  final base = '$appDisplayName/$defaultAppReleaseId';
-  final extra = suffix?.trim();
+  // Localized display names cannot be used as an HTTP header value.
+  String asciiToken(String value) =>
+      value.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
+  final base = 'FHRadioStudio/${asciiToken(defaultAppReleaseId)}';
+  final extra = suffix == null ? null : asciiToken(suffix);
   return extra == null || extra.isEmpty ? base : '$base $extra';
 }
 

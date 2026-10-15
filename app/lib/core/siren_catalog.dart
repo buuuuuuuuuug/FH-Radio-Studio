@@ -111,6 +111,8 @@ class MonsterSirenCatalogClient implements SirenCatalogClient {
       throw SirenCatalogException('请求超时：$path', cause: error);
     } on SocketException catch (error) {
       throw SirenCatalogException('网络不可用：${error.message}', cause: error);
+    } on HandshakeException catch (error) {
+      throw SirenCatalogException('安全连接失败，请检查系统代理后重试。', cause: error);
     } on FormatException catch (error) {
       throw SirenCatalogException('JSON 解析失败：$path', cause: error);
     } finally {

@@ -5,7 +5,6 @@ import 'package:path/path.dart' as p;
 
 import '../core/path_keys.dart';
 import '../core/playlist_plan.dart';
-import '../core/project_workspace.dart';
 import '../core/siren_imports.dart';
 import '../core/track_metadata_cache.dart';
 import '../domain/radio_library.dart';
@@ -25,9 +24,7 @@ final realPoolTracksProvider = Provider<List<PoolTrack>>((ref) {
       ),
     ),
   );
-  if (studio.migrationRequired ||
-      studio.migrationRunning ||
-      FhRadioStudioProject.needsPathMigration(studio.projectDir)) {
+  if (studio.migrationRequired || studio.migrationRunning) {
     return const [];
   }
   final configs = ref.watch(trackTimingProvider);
@@ -176,6 +173,8 @@ PoolTrack poolTrackFromFile(
     coverUrl: sirenImport?.coverUrl,
     coverArtPath: metadata?.coverArtPath,
     added: modifiedLabel(file),
+    modifiedAt:
+        _readField(config, 'updatedAt') as DateTime? ?? file.lastModifiedSync(),
   );
 }
 
@@ -205,13 +204,8 @@ String? pathFromRealTrackId(String id) {
 String modifiedLabel(File file) {
   try {
     final modified = file.lastModifiedSync();
-    final now = DateTime.now();
-    final age = now.difference(modified);
-    if (age.inMinutes < 60) return '${age.inMinutes.clamp(0, 59)} 分钟前';
-    if (age.inHours < 24) return '${age.inHours} 小时前';
-    if (age.inDays < 7) return '${age.inDays} 天前';
     String two(int value) => value.toString().padLeft(2, '0');
-    return '${modified.year}-${two(modified.month)}-${two(modified.day)}';
+    return '${modified.year}-${two(modified.month)}-${two(modified.day)} ${two(modified.hour)}:${two(modified.minute)}';
   } on FileSystemException {
     return '未知';
   }
@@ -268,6 +262,8 @@ Object? _readField(Object? object, String name) {
     switch (name) {
       case 'bpm':
         return value.bpm;
+      case 'updatedAt':
+        return value.updatedAt;
       case 'confirmedGroupCount':
         return value.confirmedGroupCount;
       case 'allConfirmed':

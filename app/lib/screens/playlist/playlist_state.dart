@@ -50,6 +50,42 @@ class PlaylistState {
   }
 
   List<PoolTrack> poolForDisplay(PlaylistPlan plan) {
+    // Resolve assignments once. Repeating assignmentForPath for every song
+    // previously normalized and sorted the entire plan for each pool row.
+    final ordered = plan.assignments.values.where((a) => a.isAssigned).toList()
+      ..sort((a, b) {
+        final radio = a.radioCode.compareTo(b.radioCode);
+        if (radio != 0) return radio;
+        final type = (a.playlistType == 'FreeRoam' ? 0 : 1).compareTo(
+          b.playlistType == 'FreeRoam' ? 0 : 1,
+        );
+        if (type != 0) return type;
+        final slot = a.slot.compareTo(b.slot);
+        return slot != 0
+            ? slot
+            : a.source.toLowerCase().compareTo(b.source.toLowerCase());
+      });
+    final firstBySource = <String, PlaylistAssignment>{};
+    for (final assignment in ordered) {
+      if (assignment.trackKey.isNotEmpty) {
+        firstBySource.putIfAbsent(assignment.trackKey, () => assignment);
+      }
+      firstBySource.putIfAbsent(
+        PlaylistAssignment.keyForPath(assignment.source),
+        () => assignment,
+      );
+    }
+    PoolTrack withAssignment(PoolTrack track) {
+      final assignment =
+          firstBySource[PlaylistAssignment.keyForPath(track.source)];
+      return assignment == null
+          ? track.copyWith(clearAssigned: true)
+          : track.copyWith(
+              assignedTo: assignment.radioCode,
+              slot: assignment.slot,
+            );
+    }
+
     final assignedTrackKeys = _assignedTrackKeys(plan);
     final indexed = <({int index, PoolTrack track})>[
       for (var index = 0; index < pool.length; index += 1)
@@ -75,7 +111,7 @@ class PlaylistState {
       }
       return a.index.compareTo(b.index);
     });
-    return [for (final item in indexed) item.track];
+    return [for (final item in indexed) withAssignment(item.track)];
   }
 
   PlaylistState copyWith({
@@ -140,8 +176,54 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
     state = state.copyWith(pool: List<PoolTrack>.from(pool));
   }
 
+  void reorder(
+    String source,
+    String beforeSource,
+    String radioCode,
+    String type,
+  ) => ref
+      .read(playlistPlanProvider.notifier)
+      .transaction(() => _reorder(source, beforeSource, radioCode, type));
+
+  void _reorder(
+    String source,
+    String beforeSource,
+    String radioCode,
+    String type,
+  ) {
+    if (_editingLocked || source == beforeSource) return;
+    var plan = _ensureEditablePlanSeeded().moveBefore(
+      source: source,
+      beforeSource: beforeSource,
+      radioCode: radioCode,
+      playlistType: type,
+    );
+    if (!state.splitPlaylistTypes) plan = plan.syncPlaylistTypesFrom(type);
+    ref.read(playlistPlanProvider.notifier).replaceWith(plan);
+  }
+
   /// 把曲目分配到电台。slot 自动 = 该电台当前已分配数 + 1。
   bool assignToRadio(
+    String trackId,
+    String radioCode,
+    String playlistType, {
+    int? maxSlots,
+    String? originRadioCode,
+    String? originPlaylistType,
+  }) => ref
+      .read(playlistPlanProvider.notifier)
+      .transaction(
+        () => _assignToRadio(
+          trackId,
+          radioCode,
+          playlistType,
+          maxSlots: maxSlots,
+          originRadioCode: originRadioCode,
+          originPlaylistType: originPlaylistType,
+        ),
+      );
+
+  bool _assignToRadio(
     String trackId,
     String radioCode,
     String playlistType, {
@@ -154,10 +236,9 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
     if (track == null) return false;
     final targetRadio = radioCode.trim().toUpperCase();
     final targetType = PlaylistAssignment.normalizePlaylistType(playlistType);
-    var plan = _ensureEditablePlanSeeded();
+    var plan = _editablePlan();
     if (!state.splitPlaylistTypes) {
-      _syncPlanFrom(targetType);
-      plan = ref.read(effectivePlaylistPlanProvider);
+      plan = plan.syncPlaylistTypesFrom(targetType);
     }
     final existing =
         plan.assignmentFor(
@@ -174,7 +255,9 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
             : null);
     if (existing == null &&
         maxSlots != null &&
-        plan.assignmentsForRadio(targetRadio, targetType).length >= maxSlots) {
+        (!plan.canFitRadioSources(targetRadio, [track.source], maxSlots) ||
+            plan.assignmentsForRadio(targetRadio, targetType).length >=
+                maxSlots)) {
       return false;
     }
     final nextSlot =
@@ -217,6 +300,64 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
     return true;
   }
 
+  /// Build the entire selection locally; exceeding capacity changes nothing.
+  bool assignManyToRadio(
+    List<String> trackIds,
+    String radioCode,
+    String playlistType, {
+    required int maxSlots,
+  }) {
+    if (_editingLocked) return false;
+    final tracks = <PoolTrack>[];
+    final seen = <String>{};
+    for (final id in trackIds) {
+      final track = _trackById(id);
+      if (track == null) return false;
+      if (seen.add(PlaylistAssignment.keyForPath(track.source))) {
+        tracks.add(track);
+      }
+    }
+    if (tracks.isEmpty) return false;
+    var plan = _editablePlan();
+    if (!state.splitPlaylistTypes) {
+      plan = plan.syncPlaylistTypesFrom(playlistType);
+    }
+    final type = PlaylistAssignment.normalizePlaylistType(playlistType);
+    final existing = plan.assignmentsForRadio(radioCode, type);
+    final newTracks = tracks
+        .where(
+          (t) =>
+              plan.assignmentFor(
+                source: t.source,
+                radioCode: radioCode,
+                playlistType: type,
+              ) ==
+              null,
+        )
+        .toList();
+    if (existing.length + newTracks.length > maxSlots ||
+        !plan.canFitRadioSources(
+          radioCode,
+          newTracks.map((t) => t.source),
+          maxSlots,
+        )) {
+      return false;
+    }
+    var slot = existing.length;
+    for (final track in newTracks) {
+      plan = plan.assign(
+        source: track.source,
+        radioCode: radioCode,
+        playlistType: type,
+        slot: ++slot,
+        projectDir: ref.read(studioProvider).projectDir,
+      );
+    }
+    if (!state.splitPlaylistTypes) plan = plan.syncPlaylistTypesFrom(type);
+    ref.read(playlistPlanProvider.notifier).replaceWith(plan);
+    return true;
+  }
+
   PlaylistPlan _removeMoveOrigin({
     required PlaylistPlan plan,
     required String source,
@@ -251,7 +392,18 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
   }
 
   /// 把曲目移回池子（取消分配）。
-  void unassign(String trackId, {String? radioCode, String? playlistType}) {
+  void unassign(String trackId, {String? radioCode, String? playlistType}) =>
+      ref
+          .read(playlistPlanProvider.notifier)
+          .transaction(
+            () => _unassign(
+              trackId,
+              radioCode: radioCode,
+              playlistType: playlistType,
+            ),
+          );
+
+  void _unassign(String trackId, {String? radioCode, String? playlistType}) {
     if (_editingLocked) return;
     final track = _trackById(trackId);
     if (track == null) return;
@@ -275,7 +427,11 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
     );
   }
 
-  void restoreBuiltin(String radioCode, String playlistType) {
+  void restoreBuiltin(String radioCode, String playlistType) => ref
+      .read(playlistPlanProvider.notifier)
+      .transaction(() => _restoreBuiltin(radioCode, playlistType));
+
+  void _restoreBuiltin(String radioCode, String playlistType) {
     if (_editingLocked) return;
     final controller = ref.read(playlistPlanProvider.notifier);
     _ensureEditablePlanSeeded();
@@ -322,22 +478,30 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
         .replaceWith(plan.syncPlaylistTypesFrom(playlistType));
   }
 
-  PlaylistPlan _ensureEditablePlanSeeded() {
-    final currentDraft = ref.read(playlistPlanProvider);
-    if (currentDraft.hasDraft) return currentDraft;
+  PlaylistPlan _editablePlan() {
+    final current = ref.read(playlistPlanProvider);
+    if (current.hasDraft ||
+        ref.read(playlistPlanProvider.notifier).hasUserPlan) {
+      return current;
+    }
     final effective = ref.read(effectivePlaylistPlanProvider);
     if (effective.hasDraft) return effective;
     final catalog = ref.read(playlistCatalogProvider);
     if (catalog.failed) return effective;
-    final detected = playlistPlanFromCatalog(
+    return playlistPlanFromCatalog(
       catalog,
       state.pool,
       projectDir: ref.read(studioProvider).projectDir,
       includeBuiltinTargets: false,
     );
-    if (detected.assignments.isEmpty) return effective;
-    ref.read(playlistPlanProvider.notifier).replaceWith(detected);
-    return ref.read(effectivePlaylistPlanProvider);
+  }
+
+  PlaylistPlan _ensureEditablePlanSeeded() {
+    final plan = _editablePlan();
+    if (!identical(plan, ref.read(playlistPlanProvider)) && plan.hasDraft) {
+      ref.read(playlistPlanProvider.notifier).replaceWith(plan);
+    }
+    return plan;
   }
 
   String _otherPlaylistType(String playlistType) {
@@ -353,13 +517,6 @@ PlaylistPlan playlistPlanFromCatalog(
   String? projectDir,
   bool includeBuiltinTargets = true,
 }) {
-  final poolByMeta = <String, String>{};
-  for (final track in pool) {
-    poolByMeta.putIfAbsent(_metaKey(track.title, track.artist), () {
-      return track.source;
-    });
-  }
-
   var plan = const PlaylistPlan.empty();
   for (final radio in catalog.radios) {
     for (final playlistType in const ['FreeRoam', 'Event']) {
@@ -375,11 +532,8 @@ PlaylistPlan playlistPlanFromCatalog(
 
       var slot = 1;
       for (final track in catalog.tracksOfRadio(radio.code, playlistType)) {
-        // 包 manifest 的 sound_name→source 是权威映射（构建时写入），优先采用；
-        // 只有没有该映射时才退回按 title/artist 在 pool 里匹配。
-        final source =
-            catalog.sourceForTrack(track) ??
-            poolByMeta[_metaKey(track.title, track.artist)];
+        // Source identities are supplied by the catalog's authoritative mapping.
+        final source = catalog.sourceForTrack(track);
         if (source == null || source.trim().isEmpty) continue;
         plan = plan.assign(
           source: source,
@@ -393,10 +547,6 @@ PlaylistPlan playlistPlanFromCatalog(
     }
   }
   return plan;
-}
-
-String _metaKey(String title, String artist) {
-  return '${artist.trim().toLowerCase()}|${title.trim().toLowerCase()}';
 }
 
 final playlistProvider = StateNotifierProvider<PlaylistNotifier, PlaylistState>(

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import '../core/game_deployment_target.dart';
 
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
@@ -683,6 +684,8 @@ class PackageArtifactSummary {
     required this.runtimeVerified,
     this.currentRadioPassthrough = false,
     this.baselineRestore = false,
+    this.expansionEnabled = false,
+    this.baselineBankSlots = const {},
     required this.sourceLang,
     required this.targetLang,
     this.loudnessOffsetLu,
@@ -701,6 +704,8 @@ class PackageArtifactSummary {
   final bool runtimeVerified;
   final bool currentRadioPassthrough;
   final bool baselineRestore;
+  final bool expansionEnabled;
+  final Map<String, int> baselineBankSlots;
   final String? sourceLang;
   final String? targetLang;
   final double? loudnessOffsetLu;
@@ -1377,7 +1382,7 @@ class StudioState {
     final projectPathMigrationRequired =
         hasProject && FhRadioStudioProject.needsPathMigration(projectDir);
     final radio = _objectInt(projectSettings['radio']) ?? 4;
-    if (hasProject) {
+    if (hasProject && !projectPathMigrationRequired) {
       FhRadioStudioProject.writeSettings(
         projectDir,
         gameDir: gameDir,
@@ -2367,8 +2372,24 @@ PackageArtifactSummary? _readPackageSummaryFromManifest(File? manifest) {
     currentRadioPassthrough:
         _objectBool(data['current_radio_passthrough']) ?? false,
     baselineRestore: _objectBool(data['baseline_restore']) ?? false,
+    expansionEnabled:
+        _objectBool(data['expansion_enabled']) == true ||
+        radios.any((unit) => _objectMap(unit)?['expansion_enabled'] == true),
     sourceLang: _objectString(language?['source_lang']),
     targetLang: _objectString(language?['target_lang']),
+    baselineBankSlots: {
+      for (final item in radios)
+        if (_objectInt(_objectMap(item)?['radio']) != null &&
+            _objectInt(_objectMap(item)?['baseline_bank_slots']) != null)
+          'R${_objectInt(_objectMap(item)?['radio'])}': _objectInt(
+            _objectMap(item)?['baseline_bank_slots'],
+          )!,
+      if (_objectInt(data['radio']) != null &&
+          _objectInt(data['baseline_bank_slots']) != null)
+        'R${_objectInt(data['radio'])}': _objectInt(
+          data['baseline_bank_slots'],
+        )!,
+    },
     loudnessOffsetLu: _packageLoudnessOffsetLu(data),
     previewTracks: previews,
     assignments: assignments,
@@ -2729,17 +2750,19 @@ class StudioController extends StateNotifier<StudioState> {
     final aiProfile = _validatedAiProfile(
       _objectString(projectSettings['ai_profile']) ?? state.aiProfile,
     );
-    FhRadioStudioProject.writeSettings(
-      next,
-      gameDir: gameDir,
-      preferredPath: preferredPath,
-      radio: radio,
-      sourceLang: sourceLang,
-      targetLang: targetLang,
-      aiProfile: aiProfile,
-    );
     final projectPathMigrationRequired =
         FhRadioStudioProject.needsPathMigration(next);
+    if (!projectPathMigrationRequired) {
+      FhRadioStudioProject.writeSettings(
+        next,
+        gameDir: gameDir,
+        preferredPath: preferredPath,
+        radio: radio,
+        sourceLang: sourceLang,
+        targetLang: targetLang,
+        aiProfile: aiProfile,
+      );
+    }
     state = state.copyWith(
       hasProject: true,
       projectDir: next,
@@ -3026,8 +3049,10 @@ class StudioController extends StateNotifier<StudioState> {
       }
       final payload = _decodeJsonObject(result.stdout, label: '导入结果');
       final imported = _importedPathsFromPayload(payload);
+      final skipped = _jsonList(payload?['duplicates_skipped']).length;
+      if (skipped > 0) _append('检测到 $skipped 首重复音频文件，已跳过；保留已有曲目和点位。');
       if (imported.isEmpty) {
-        _append('没有找到可导入的音频文件。');
+        _append(skipped > 0 ? '所选文件已在项目中，未重复添加。' : '没有找到可导入的音频文件。');
         return;
       }
       await _refreshTrackMetadataCacheWithinBusy(allSources: true);
@@ -3965,6 +3990,7 @@ class StudioController extends StateNotifier<StudioState> {
   }
 
   Future<void> startupFullCheckOnce() async {
+    if (Platform.environment['FH_RADIO_STUDIO_UI_TEST_PROJECT'] != null) return;
     if (_startupFullCheckStarted || !state.hasProject) return;
     _startupFullCheckStarted = true;
     await refreshStatus(verifyFiles: true);
@@ -4062,8 +4088,33 @@ class StudioController extends StateNotifier<StudioState> {
     );
   }
 
+  Future<Map<String, dynamic>> estimatePackageSizes(PlaylistPlan plan) async {
+    final project = state.projectDir;
+    var planForEstimate = plan;
+    if (!plan.hasDraft) {
+      final summary =
+          state.lastPackageSummary ?? _readPackageSummary(state.lastPackageDir);
+      if (summary != null) planForEstimate = _planFromPackageSummary(summary);
+    }
+    final result = await _cli.runBase([
+      'estimate-package',
+      '--project-dir',
+      project,
+      '--baseline-manifest',
+      state.currentBaselineManifest,
+      '--playlist-plan',
+      '-',
+      if (FhRadioStudioProject.readSettings(project)['expansion_enabled'] ==
+          true)
+        '--expand-slots',
+    ], stdinInput: planForEstimate.encodeForCli());
+    if (!result.ok) throw FormatException(result.stderr.trim());
+    return jsonDecode(result.stdout) as Map<String, dynamic>;
+  }
+
   Future<bool> buildPackage({
     double loudnessOffsetLu = kDefaultPackageLoudnessOffsetLu,
+    int quality = 50,
     PlaylistPlan? plan,
   }) async {
     if (state.busy) return false;
@@ -4073,6 +4124,10 @@ class StudioController extends StateNotifier<StudioState> {
     final normalizedLoudnessOffsetLu = normalizePackageLoudnessOffsetLu(
       loudnessOffsetLu,
     );
+    if (quality < 1 || quality > 100) {
+      _append('构建质量必须位于 1–100。');
+      return false;
+    }
     if (_rejectProjectEditWhenBaselineBroken('准备电台包')) return false;
     FhRadioStudioProject.ensure(state.projectDir);
     if (_canCreatePendingPackage) {
@@ -4122,6 +4177,21 @@ class StudioController extends StateNotifier<StudioState> {
         ? (state.lastPackageSummary ??
               _readPackageSummary(state.lastPackageDir))
         : null;
+    final expansionEnabled =
+        FhRadioStudioProject.readSettings(
+          state.projectDir,
+        )['expansion_enabled'] ==
+        true;
+    final expansionChanged =
+        currentPackageSummary != null &&
+        (FhRadioStudioProject.readSettings(
+                  state.projectDir,
+                )['last_build_expansion_enabled'] ??
+                currentPackageSummary.expansionEnabled) !=
+            expansionEnabled;
+    final qualityChanged =
+        _objectInt(readPackageManifest(state.lastPackageDir)?['quality']) !=
+        quality;
     final currentLoudnessOffsetLu = currentPackageSummary?.loudnessOffsetLu;
     final loudnessOffsetChanged =
         currentLoudnessOffsetLu == null ||
@@ -4130,12 +4200,29 @@ class StudioController extends StateNotifier<StudioState> {
     // 重建一份 plan（source 全部指向项目 sources/siren），再走正常的 --playlist-plan
     // 构建。不能从准备包目录读，因为输出目录就是它、构建前会被清空。
     if (!planForBuild.hasDraft &&
-        loudnessOffsetChanged &&
+        (loudnessOffsetChanged || expansionChanged || qualityChanged) &&
         currentPackageSummary != null &&
         currentPackageSummary.assignments.isNotEmpty) {
       final seeded = _planFromPackageSummary(currentPackageSummary);
       if (seeded.hasDraft) {
         planForBuild = seeded;
+      }
+    }
+    if (!expansionEnabled && currentPackageSummary != null) {
+      final sourcesByRadio = <String, Set<String>>{};
+      for (final assignment in planForBuild.assignments.values) {
+        (sourcesByRadio[assignment.radioCode] ??= <String>{}).add(
+          assignment.source,
+        );
+      }
+      for (final entry in sourcesByRadio.entries) {
+        final capacity = currentPackageSummary.baselineBankSlots[entry.key];
+        if (capacity != null && entry.value.length > capacity) {
+          _append(
+            '${entry.key} 仍有 ${entry.value.length} 首，原版最多 $capacity 首。请启用电台扩容或减少该电台的曲目；现有播放列表和准备包已保留。',
+          );
+          return false;
+        }
       }
     }
     final draft = _playlistDraftForBuild(planForBuild);
@@ -4160,15 +4247,6 @@ class StudioController extends StateNotifier<StudioState> {
       }
       return false;
     }
-    if (draft.hasPlan &&
-        !canBuildLanguageChange &&
-        !restoresBuiltin &&
-        !loudnessOffsetChanged &&
-        state.currentPackageReady &&
-        _packageAssignmentsMatchPlan(currentPackageSummary, planForBuild)) {
-      _append('准备包已经等于当前播放列表和响度；修改分配、语言或响度增益后再重新构建。');
-      return false;
-    }
     final musicInputs = draft.inputs.isNotEmpty
         ? draft.inputs
         : _musicInputsFromPackageSummary(previousAppliedSummary);
@@ -4191,6 +4269,21 @@ class StudioController extends StateNotifier<StudioState> {
       _append(_missingMusicInputMessage(missing.first));
       return false;
     }
+    // Reject incomplete saved nodes before replacing an existing prepared package.
+    final timings = TrackTimingStore.readAll(state.projectDir);
+    final unfinished = FhRadioStudioProject.collectAudioFiles(musicInputs)
+        .where(
+          (file) =>
+              timings[TrackTimingConfig.keyForPath(file.path)]?.allConfirmed !=
+              true,
+        )
+        .toList();
+    if (unfinished.isNotEmpty) {
+      _append(
+        '无法构建：${unfinished.length} 首歌曲的时间点未完成或未确认。请先配置并保存：\n${unfinished.map((f) => p.basename(f.path)).join('\n')}',
+      );
+      return false;
+    }
     final outDir = FhRadioStudioProject.currentPackageDir(state.projectDir);
     final timingManifest = TrackTimingStore.writeBuildManifest(
       projectDir: state.projectDir,
@@ -4209,6 +4302,13 @@ class StudioController extends StateNotifier<StudioState> {
           draft.hasPlan && (musicInputs.isNotEmpty || restoresBuiltin);
       final result = await _run([
         'build-package',
+        '--quality',
+        '$quality',
+        if (FhRadioStudioProject.readSettings(
+              state.projectDir,
+            )['expansion_enabled'] ==
+            true)
+          '--expand-slots',
         ...musicInputs,
         '--game-dir',
         state.gameDir,
@@ -4251,6 +4351,10 @@ class StudioController extends StateNotifier<StudioState> {
           lastPackageSummary: _readPackageSummary(packageDir),
           pendingPackageDir: null,
           pendingPackageSummary: null,
+        );
+        FhRadioStudioProject.writeSettings(
+          state.projectDir,
+          lastBuildExpansionEnabled: expansionEnabled,
         );
         built = true;
         await _refreshIntegrityFromCli();
@@ -4319,10 +4423,22 @@ class StudioController extends StateNotifier<StudioState> {
       final loudnessOffsetLu = normalizePackageLoudnessOffsetLu(
         packageSummary?.loudnessOffsetLu ?? kDefaultPackageLoudnessOffsetLu,
       );
+      final quality =
+          _objectInt(readPackageManifest(state.lastPackageDir)?['quality']) ??
+          50;
       final result = await _run([
         'build-package',
+        '--quality',
+        '$quality',
         '--game-dir',
+        // Expansion is built from the trusted pending baseline too.
+        // Flag ordering is kept explicit below the game directory value.
         state.gameDir,
+        if (FhRadioStudioProject.readSettings(
+              state.projectDir,
+            )['expansion_enabled'] ==
+            true)
+          '--expand-slots',
         '--source-audio-dir',
         state.pendingBaselineAudioDir,
         '--source-string-tables-dir',
@@ -4478,37 +4594,6 @@ class StudioController extends StateNotifier<StudioState> {
       hasPlan: true,
       restoresBuiltin: plan.builtinTargets.isNotEmpty,
     );
-  }
-
-  bool _packageAssignmentsMatchPlan(
-    PackageArtifactSummary? summary,
-    PlaylistPlan plan,
-  ) {
-    if (summary == null || plan.builtinTargets.isNotEmpty) return false;
-    final planKeys = <String>{};
-    for (final assignment in plan.assignments.values) {
-      if (!assignment.isAssigned) continue;
-      planKeys.add(
-        '${assignment.trackKey}|${assignment.radioCode}|${assignment.playlistType}|${assignment.slot}',
-      );
-    }
-    final packageKeys = <String>{};
-    for (final assignment in summary.assignments) {
-      final radioCode = canonicalRadioCode(assignment.radioLabel);
-      final trackKey =
-          trackKeyForProjectPath(state.projectDir, assignment.source) ??
-          PackageTrackAssignment.keyForPath(assignment.source);
-      for (final playlistType in assignment.normalizedPlaylistTypes) {
-        packageKeys.add(
-          '$trackKey|$radioCode|$playlistType|${assignment.slot}',
-        );
-      }
-    }
-    if (planKeys.length != packageKeys.length) return false;
-    for (final key in planKeys) {
-      if (!packageKeys.contains(key)) return false;
-    }
-    return true;
   }
 
   String _missingMusicInputMessage(String source) {
@@ -4693,7 +4778,9 @@ class StudioController extends StateNotifier<StudioState> {
     return _applyBaseline(baselineDir, label);
   }
 
-  Future<void> deployOldPackage() async {
+  Future<void> deployOldPackage({
+    GameDeploymentTarget target = GameDeploymentTarget.mediapc,
+  }) async {
     if (!await _ensureProjectPathMigratedForAction('写入旧准备包')) return;
     if (_rejectProjectEditWhenBaselineBroken('写入旧准备包')) return;
     final packageDir = state.lastPackageDir;
@@ -4702,11 +4789,13 @@ class StudioController extends StateNotifier<StudioState> {
       return;
     }
     await _withBusy('写入旧准备包', () async {
-      await _deployPackage(packageDir, force: true);
+      await _deployPackage(packageDir, force: true, target: target);
     });
   }
 
-  Future<void> deployPendingPackage() async {
+  Future<void> deployPendingPackage({
+    GameDeploymentTarget target = GameDeploymentTarget.mediapc,
+  }) async {
     if (!await _ensureProjectPathMigratedForAction('写入测试准备包')) return;
     if (_rejectProjectEditWhenBaselineBroken('写入测试准备包')) return;
     final packageDir = state.pendingPackageDir;
@@ -4715,7 +4804,7 @@ class StudioController extends StateNotifier<StudioState> {
       return;
     }
     await _withBusy('写入测试准备包', () async {
-      await _deployPackage(packageDir, force: true);
+      await _deployPackage(packageDir, force: true, target: target);
     });
   }
 
@@ -5007,7 +5096,10 @@ class StudioController extends StateNotifier<StudioState> {
     });
   }
 
-  Future<void> deployLastPackage({bool force = false}) async {
+  Future<void> deployLastPackage({
+    bool force = false,
+    GameDeploymentTarget target = GameDeploymentTarget.mediapc,
+  }) async {
     if (state.busy) return;
     if (!await _ensureProjectPathMigratedForAction('写入游戏')) return;
     if (_rejectProjectEditWhenBaselineBroken('写入游戏')) return;
@@ -5017,11 +5109,15 @@ class StudioController extends StateNotifier<StudioState> {
       return;
     }
     await _withBusy(force ? '强制部署包到游戏目录' : '部署包到游戏目录', () async {
-      await _deployPackage(packageDir, force: force);
+      await _deployPackage(packageDir, force: force, target: target);
     });
   }
 
-  Future<void> _deployPackage(String packageDir, {required bool force}) async {
+  Future<void> _deployPackage(
+    String packageDir, {
+    required bool force,
+    GameDeploymentTarget target = GameDeploymentTarget.mediapc,
+  }) async {
     if (!force && !File(state.currentBaselineManifest).existsSync()) {
       _append('缺少原始备份。请先在 fresh install 或 Steam 验证完整性之后创建原始备份。');
       return;
@@ -5045,6 +5141,8 @@ class StudioController extends StateNotifier<StudioState> {
       p.join(packageDir, 'package'),
       '--game-dir',
       state.gameDir,
+      '--target-root',
+      target.directoryName,
     ];
     if (state.preferredPath.trim().isNotEmpty) {
       args.addAll(['--preferred-path', state.preferredPath]);

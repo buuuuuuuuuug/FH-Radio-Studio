@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'atomic_file.dart';
 import 'path_keys.dart';
 import 'project_refs.dart';
 
@@ -165,8 +166,7 @@ void writeProjectJsonSync({
     filePath: file.path,
     pathFields: pathFields,
   );
-  file.parent.createSync(recursive: true);
-  file.writeAsStringSync(encoder.convert(payload), encoding: utf8);
+  writeTextAtomicallySync(file, encoder.convert(payload));
 }
 
 String _jsonPointer(List<String> segments) {

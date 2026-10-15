@@ -26,7 +26,25 @@ enum AppAccent {
 }
 
 /// 取一个 accent 在某 brightness 下的派生色集。
-AccentColors accentColors(AppAccent accent, Brightness brightness) {
+AccentColors accentColors(
+  AppAccent accent,
+  Brightness brightness, {
+  Color? customColor,
+}) {
+  if (customColor != null) {
+    final base = customColor.withAlpha(255);
+    final luminance = base.computeLuminance();
+    final whiteContrast = 1.05 / (luminance + .05);
+    final blackContrast = (luminance + .05) / .05;
+    return AccentColors(
+      base: base,
+      bg: base.withAlpha(31),
+      ring: base.withAlpha(89),
+      onAccent: whiteContrast >= blackContrast
+          ? Colors.white
+          : const Color(0xFF0A0A0B),
+    );
+  }
   return brightness == Brightness.light
       ? _lightTable[accent]!
       : _darkTable[accent]!;

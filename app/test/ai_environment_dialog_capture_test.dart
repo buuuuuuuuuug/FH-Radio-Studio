@@ -16,36 +16,34 @@ import 'package:fh_radio_studio/widgets/ai_environment_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture AI environment dialog with ready deep profile',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      final tempRoot = Directory.systemTemp.createTempSync(
-        'fh_radio_studio_ai_environment_dialog_capture_',
-      );
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-        if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
-      });
+  testWidgets('capture AI environment dialog with ready deep profile', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final tempRoot = Directory.systemTemp.createTempSync(
+      'fh_radio_studio_ai_environment_dialog_capture_',
+    );
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
+    });
 
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
-      await _captureAiEnvironmentDialog(
-        tester,
-        tempRoot: tempRoot,
-        logicalSize: const Size(1244, 900),
-        outputPath: p.join(outDir.path, 'ai_environment_dialog_regular.png'),
-      );
-      await _captureAiEnvironmentDialog(
-        tester,
-        tempRoot: tempRoot,
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'ai_environment_dialog_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_AI_ENVIRONMENT_DIALOG'] != '1',
-  );
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
+    await _captureAiEnvironmentDialog(
+      tester,
+      tempRoot: tempRoot,
+      logicalSize: const Size(1244, 900),
+      outputPath: p.join(outDir.path, 'ai_environment_dialog_regular.png'),
+    );
+    await _captureAiEnvironmentDialog(
+      tester,
+      tempRoot: tempRoot,
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'ai_environment_dialog_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_AI_ENVIRONMENT_DIALOG'] != '1');
 }
 
 Future<void> _captureAiEnvironmentDialog(

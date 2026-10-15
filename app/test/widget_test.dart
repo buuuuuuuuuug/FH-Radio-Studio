@@ -37,10 +37,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _projectDirKey = 'rm.studio.projectDir';
 
 void main() {
-  test('placeholder', () {
-    expect(1 + 1, 2);
-  });
-
   testWidgets('TrackCard marks MSR imported pool tracks', (tester) async {
     const track = PoolTrack(
       id: 'siren-card',
@@ -70,7 +66,7 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('MSR'), findsOneWidget);
-    expect(find.text('0/4'), findsOneWidget);
+    expect(find.text('未完成 0/4'), findsOneWidget);
   });
 
   testWidgets('package loudness dialog uses discrete offset choices', (
@@ -828,7 +824,13 @@ void main() {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1600, 900);
 
-    SharedPreferences.setMockInitialValues({_projectDirKey: 'project'});
+    final project = Directory.systemTemp.createTempSync(
+      'studio-msr-navigation-',
+    );
+    addTearDown(() => project.deleteSync(recursive: true));
+    FhRadioStudioProject.ensure(project.path);
+    FhRadioStudioProject.writeSettings(project.path, sirenEnabled: true);
+    SharedPreferences.setMockInitialValues({_projectDirKey: project.path});
     final prefs = await SharedPreferences.getInstance();
     final controller = _StaticStudioController(prefs);
     final router = GoRouter(
@@ -836,7 +838,7 @@ void main() {
       routes: [
         GoRoute(
           path: '/pool',
-          builder: (context, state) => const CustomPoolScreen(),
+          builder: (context, state) => const Scaffold(body: CustomPoolScreen()),
         ),
         GoRoute(
           path: '/siren',
@@ -1117,7 +1119,7 @@ void main() {
       expect(find.text('分场景编辑'), findsOneWidget);
       expect(find.text('FreeRoam · 漫游'), findsNothing);
       expect(find.text('Event · 比赛'), findsNothing);
-      expect(find.text('搜索曲目 / 艺术家'), findsOneWidget);
+      expect(find.text('搜索歌曲 / 歌手 / 文件名'), findsOneWidget);
       expect(find.text('custom · 自建'), findsOneWidget);
       expect(find.text('builtin · 锁定'), findsWidgets);
       expect(find.text('统一写入漫游和比赛'), findsNothing);
@@ -1142,7 +1144,7 @@ void main() {
       expect(find.text('分场景编辑'), findsOneWidget);
       expect(find.text('FreeRoam · 漫游'), findsNothing);
       expect(find.text('Event · 比赛'), findsNothing);
-      expect(find.text('搜索曲目 / 艺术家'), findsOneWidget);
+      expect(find.text('搜索歌曲 / 歌手 / 文件名'), findsOneWidget);
       expect(find.text('custom · 自建'), findsOneWidget);
       expect(find.text('builtin · 锁定'), findsWidgets);
       expect(find.text('统一写入漫游和比赛'), findsNothing);
@@ -1284,6 +1286,10 @@ void main() {
     );
     const catalog = PlaylistCatalog(
       origin: PlaylistCatalogOrigin.game,
+      sourceBySoundName: {
+        'xs-current': r'C:\music\user-song.wav',
+        'xs-current-event': r'C:\music\user-song.wav',
+      },
       sourcePath: null,
       radios: [radio],
       modes: {'R4': StationMode.custom},
@@ -1291,6 +1297,7 @@ void main() {
         'R4': [
           TrackRef(
             id: 'xs-current',
+            soundName: 'xs-current',
             title: 'User Song',
             artist: 'Local Artist',
             durationSec: 121,
@@ -1302,6 +1309,7 @@ void main() {
         'R4': [
           TrackRef(
             id: 'xs-current-event',
+            soundName: 'xs-current-event',
             title: 'User Song',
             artist: 'Local Artist',
             durationSec: 121,

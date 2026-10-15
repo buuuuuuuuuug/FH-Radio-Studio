@@ -20,32 +20,28 @@ import 'package:fh_radio_studio/theme/tokens.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture custom pool route with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      SharedPreferences.setMockInitialValues({
-        'rm.studio.projectDir': 'capture',
-      });
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+  testWidgets('capture custom pool route with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    SharedPreferences.setMockInitialValues({'rm.studio.projectDir': 'capture'});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureCustomPool(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'custom_pool_regular.png'),
-      );
-      await _captureCustomPool(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1400),
-        outputPath: p.join(outDir.path, 'custom_pool_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_CUSTOM_POOL'] != '1',
-  );
+    await _captureCustomPool(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'custom_pool_regular.png'),
+    );
+    await _captureCustomPool(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1400),
+      outputPath: p.join(outDir.path, 'custom_pool_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_CUSTOM_POOL'] != '1');
 }
 
 Future<void> _captureCustomPool(

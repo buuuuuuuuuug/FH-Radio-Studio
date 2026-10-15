@@ -5,7 +5,6 @@ import '../../state/router.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
 import '../../widgets/rm_button.dart';
-import '../../widgets/rm_chip.dart';
 import '../../widgets/rm_icon.dart';
 
 class EditorBreadcrumb extends StatelessWidget {
@@ -14,11 +13,15 @@ class EditorBreadcrumb extends StatelessWidget {
     required this.trackTitle,
     required this.assignedTo,
     required this.slot,
+    this.onBack,
+    this.backLabel = '自建歌曲 · Esc 返回',
   });
 
   final String trackTitle;
   final String? assignedTo;
   final int? slot;
+  final VoidCallback? onBack;
+  final String backLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -28,27 +31,25 @@ class EditorBreadcrumb extends StatelessWidget {
       child: Row(
         children: [
           RmButton(
-            onPressed: () => context.go(RmRoutes.pool),
+            onPressed: onBack ?? () => context.go(RmRoutes.pool),
             size: RmButtonSize.sm,
             variant: RmButtonVariant.ghost,
             leading: Transform.rotate(
               angle: 3.14159,
               child: const RmIcon('arrow-right', size: 12),
             ),
-            label: '自建歌曲',
+            label: backLabel,
           ),
           const SizedBox(width: 8),
           Text('/', style: RmText.body(color: rm.fg4)),
           const SizedBox(width: 8),
-          Text(
-            trackTitle,
-            style: RmText.body(weight: FontWeight.w500, color: rm.fg),
-          ),
-          const Spacer(),
-          RmChip(
-            label: assignedTo == null ? '未分配' : '分配至 $assignedTo · slot $slot',
-            variant: RmChipVariant.muted,
-            showDot: true,
+          Flexible(
+            child: Text(
+              trackTitle,
+              style: RmText.body(weight: FontWeight.w500, color: rm.fg),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),

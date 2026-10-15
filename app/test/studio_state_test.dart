@@ -10,6 +10,7 @@ import 'package:fh_radio_studio/core/playlist_plan.dart';
 import 'package:fh_radio_studio/core/project_refs.dart';
 import 'package:fh_radio_studio/core/project_workspace.dart';
 import 'package:fh_radio_studio/core/track_metadata_cache.dart';
+import 'package:fh_radio_studio/core/track_timing_config.dart';
 import 'package:fh_radio_studio/state/app_state.dart';
 import 'package:fh_radio_studio/state/custom_pool_tracks.dart';
 import 'package:fh_radio_studio/state/studio_state.dart';
@@ -1014,6 +1015,7 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
           title: 'Diff Song',
         );
         expect(trackKey, isNotNull);
+        _completeBuildTimingFixture(projectDir, source.path);
         final seededPlan =
             '''
 {
@@ -1080,7 +1082,7 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
     );
 
     test(
-      'does not rebuild when current package already matches playlist draft',
+      'rebuilds changed timepoints even when playlist draft matches current package',
       () async {
         final projectDir = p.join(tempRoot.path, 'project');
         final paths = _writeIntegrityFixture(
@@ -1116,17 +1118,47 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
         SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
 
         final prefs = await SharedPreferences.getInstance();
-        final controller = StudioController(prefs);
-
+        _upsertTrackMetadata(
+          projectDir,
+          source.path,
+          artist: 'Test',
+          title: 'Song',
+        );
+        TrackTimingStore.save(
+          projectDir,
+          TrackTimingConfig(
+            source: source.path,
+            bpm: 120,
+            markersSec: const {
+              'TrackDrop': 12.345,
+              'PostDrop': 40,
+              'TrackLoopStart': 20,
+              'TrackLoopEnd': 90,
+              'PostRaceLoopStart': 20,
+              'PostRaceLoopEnd': 90,
+            },
+            confirmed: const {'td': true, 'pd': true, 'tl': true, 'pl': true},
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+        final runtime = _testUvRuntime(tempRoot, 'timepoint-only-rebuild');
+        final cli = _RecordingCli(runtime);
+        final controller = _RecordingCliStudioController(prefs, cli);
+        controller.setStateForTest(
+          controller.state.copyWith(repoRoot: runtime.projectRoot),
+        );
         final built = await controller.buildPackage(
           plan: PlaylistPlanStore.read(projectDir),
         );
-
-        expect(built, isFalse);
-        expect(
-          controller.state.log,
-          contains('准备包已经等于当前播放列表和响度；修改分配、语言或响度增益后再重新构建。'),
+        expect(built, isTrue);
+        final args = cli.commands.singleWhere(
+          (a) => a.first == 'build-package',
         );
+        expect(args, contains('--timing-manifest'));
+        final timing = File(
+          args[args.indexOf('--timing-manifest') + 1],
+        ).readAsStringSync();
+        expect(timing, contains('12.345'));
       },
     );
 
@@ -1303,6 +1335,69 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
     );
 
     test(
+      'rebuilds quality alone from existing package assignments without a draft',
+      () async {
+        // Regression: a quality-only rebuild with no in-progress draft must not
+        // read the prepared package dir (it is the output dir and gets cleared).
+        // It seeds a plan from the package manifest (sources/siren) and builds
+        // with --playlist-plan.
+        final projectDir = p.join(tempRoot.path, 'project');
+        final paths = _writeIntegrityFixture(
+          projectDir,
+          deployedBytes: 'original',
+        );
+        final source = File(
+          p.join(FhRadioStudioProject.sourcesDir(projectDir), 'kept-song.wav'),
+        )..createSync(recursive: true);
+        _writePackageManifestFile(
+          File(
+            p.join(
+              paths.packageRoot,
+              'package',
+              'fh_radio_studio_package_manifest.json',
+            ),
+          ),
+          source: source.path,
+          radioCode: 'R4',
+          playlistType: 'FreeRoam',
+          slot: 1,
+          loudnessOffsetLu: 3.0,
+        );
+        // Intentionally no PlaylistPlanStore.write here.
+        SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
+
+        final prefs = await SharedPreferences.getInstance();
+        final runtime = _testUvRuntime(tempRoot, 'package-loudness-nodraft');
+        final cli = _RecordingCli(runtime);
+        final controller = _RecordingCliStudioController(prefs, cli);
+        controller.setStateForTest(
+          controller.state.copyWith(repoRoot: runtime.projectRoot),
+        );
+
+        final built = await controller.buildPackage(
+          loudnessOffsetLu: 3.0,
+          quality: 100,
+        );
+
+        expect(built, isTrue);
+        final buildArgs = cli.commands.singleWhere(
+          (args) => args.isNotEmpty && args.first == 'build-package',
+        );
+        expect(buildArgs, isNot(contains('--playlist-from-package')));
+        expect(buildArgs, containsAllInOrder(['--playlist-plan', '-']));
+        expect(buildArgs, contains(source.path));
+        expect(buildArgs, containsAllInOrder(['--loudness-offset-lu', '3']));
+        expect(buildArgs, containsAllInOrder(['--quality', '100']));
+        final plan = PlaylistPlanCodec.decodeJson(
+          cli.stdinForCommand('build-package')!,
+        );
+        expect(plan.assignments.values.map((item) => item.source).toSet(), {
+          source.path,
+        });
+      },
+    );
+
+    test(
       'uses last applied package assignments when current package is missing',
       () async {
         final projectDir = p.join(tempRoot.path, 'project');
@@ -1335,6 +1430,127 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
           isNot(contains('播放列表还没有分配曲目。请先在“播放列表”里把自建歌曲拖到目标电台。')),
         );
         expect(controller.state.log.join('\n'), contains('previous-song.wav'));
+      },
+    );
+
+    for (final expansion in [false, true]) {
+      test('forwards expansion only when enabled ($expansion)', () async {
+        final projectDir = p.join(tempRoot.path, 'opt-in-$expansion');
+        _writeIntegrityFixture(projectDir, deployedBytes: 'original');
+        FhRadioStudioProject.writeSettings(
+          projectDir,
+          expansionEnabled: expansion,
+        );
+        final source = File(
+          p.join(FhRadioStudioProject.sourcesDir(projectDir), 'song.wav'),
+        )..createSync(recursive: true);
+        _writeLegacyPlaylistPlan(
+          projectDir,
+          const PlaylistPlan.empty().assign(
+            source: source.path,
+            radioCode: 'R4',
+            playlistType: 'FreeRoam',
+            slot: 1,
+          ),
+        );
+        _upsertTrackMetadata(projectDir, source.path);
+        SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
+        final runtime = _testUvRuntime(tempRoot, 'opt-in-runtime-$expansion');
+        final cli = _RecordingCli(runtime);
+        final controller = _RecordingCliStudioController(
+          await SharedPreferences.getInstance(),
+          cli,
+        );
+        addTearDown(controller.dispose);
+        controller.setStateForTest(
+          controller.state.copyWith(repoRoot: runtime.projectRoot),
+        );
+        expect(
+          await controller.buildPackage(
+            plan: PlaylistPlanStore.read(projectDir),
+          ),
+          isTrue,
+        );
+        final args = cli.commands.singleWhere(
+          (args) => args.first == 'build-package',
+        );
+        expect(args.contains('--expand-slots'), expansion);
+        expect(
+          FhRadioStudioProject.readSettings(
+            projectDir,
+          )['last_build_expansion_enabled'],
+          expansion,
+        );
+      });
+    }
+
+    test(
+      'disabled expansion rejects excessive assignments before clearing prepared package',
+      () async {
+        final projectDir = p.join(tempRoot.path, 'keep-expanded');
+        final paths = _writeIntegrityFixture(
+          projectDir,
+          deployedBytes: 'original',
+        );
+        final one = File(
+          p.join(FhRadioStudioProject.sourcesDir(projectDir), 'one.wav'),
+        )..createSync(recursive: true);
+        final two = File(
+          p.join(FhRadioStudioProject.sourcesDir(projectDir), 'two.wav'),
+        )..createSync(recursive: true);
+        final manifest = File(
+          p.join(
+            paths.packageRoot,
+            'package',
+            'fh_radio_studio_package_manifest.json',
+          ),
+        );
+        _writePackageManifestFile(
+          manifest,
+          source: one.path,
+          radioCode: 'R4',
+          playlistType: 'FreeRoam',
+          slot: 1,
+        );
+        final data =
+            jsonDecode(manifest.readAsStringSync()) as Map<String, dynamic>;
+        (data['radios'] as List).first['baseline_bank_slots'] = 1;
+        (data['radios'] as List).first['expansion_enabled'] = true;
+        manifest.writeAsStringSync(jsonEncode(data));
+        final before = manifest.readAsStringSync();
+        final plan = const PlaylistPlan.empty()
+            .assign(
+              source: one.path,
+              radioCode: 'R4',
+              playlistType: 'FreeRoam',
+              slot: 1,
+            )
+            .assign(
+              source: two.path,
+              radioCode: 'R4',
+              playlistType: 'FreeRoam',
+              slot: 2,
+            );
+        _writeLegacyPlaylistPlan(projectDir, plan);
+        _upsertTrackMetadata(projectDir, two.path);
+        SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
+        final runtime = _testUvRuntime(tempRoot, 'keep-expanded-runtime');
+        final cli = _RecordingCli(runtime);
+        final controller = _RecordingCliStudioController(
+          await SharedPreferences.getInstance(),
+          cli,
+        );
+        addTearDown(controller.dispose);
+        controller.setStateForTest(
+          controller.state.copyWith(repoRoot: runtime.projectRoot),
+        );
+        expect(await controller.buildPackage(plan: plan), isFalse);
+        expect(
+          cli.commands.where((args) => args.first == 'build-package'),
+          isEmpty,
+        );
+        expect(manifest.readAsStringSync(), before);
+        expect(PlaylistPlanStore.read(projectDir).assignments.length, 2);
       },
     );
 
@@ -2278,6 +2494,7 @@ void _writeLegacyPlaylistPlan(String projectDir, PlaylistPlan plan) {
   for (final assignment in plan.assignments.values) {
     final source = assignment.source;
     final projectTrackKey = _upsertTrackMetadata(projectDir, source);
+    _completeBuildTimingFixture(projectDir, source);
     assignments.add({
       'track_key': projectTrackKey ?? assignment.trackKey,
       if (projectTrackKey == null) 'source': source,
@@ -2319,6 +2536,7 @@ void _writePackageManifestFile(
   final trackKey = projectDir == null
       ? null
       : _upsertTrackMetadata(projectDir, source);
+  if (projectDir != null) _completeBuildTimingFixture(projectDir, source);
   final trackRefEntry = trackKey == null
       ? '"source": "${_jsonPath(source)}"'
       : '"track_key": "$trackKey"';
@@ -2580,3 +2798,30 @@ List<int> _le32(int value) => [
 ];
 
 String _jsonPath(String path) => path.replaceAll(r'\', r'\\');
+
+// Positive build fixtures contain fully confirmed nodes; incomplete builds have
+// their own regression test and must fail before replacing the prepared package.
+void _completeBuildTimingFixture(String projectDir, String source) {
+  if (TrackTimingStore.readAll(
+    projectDir,
+  ).containsKey(TrackTimingConfig.keyForPath(source))) {
+    return;
+  }
+  TrackTimingStore.save(
+    projectDir,
+    TrackTimingConfig(
+      source: source,
+      bpm: 120,
+      markersSec: const {
+        'TrackDrop': 1,
+        'PostDrop': 40,
+        'TrackLoopStart': 10,
+        'TrackLoopEnd': 60,
+        'PostRaceLoopStart': 10,
+        'PostRaceLoopEnd': 60,
+      },
+      confirmed: const {'td': true, 'pd': true, 'tl': true, 'pl': true},
+      updatedAt: DateTime(2026),
+    ),
+  );
+}

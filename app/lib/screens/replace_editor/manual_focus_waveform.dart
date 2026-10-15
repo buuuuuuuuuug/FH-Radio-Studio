@@ -1,6 +1,10 @@
+import 'editor_timecode.dart';
+import '../../widgets/waveform_zoom_gesture.dart';
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
 import '../../domain/replacement_models.dart';
+import '../../domain/waveform_envelope.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
 import '../../theme/tokens.dart';
@@ -46,7 +50,10 @@ class ManualFocusWaveform extends StatefulWidget {
     required this.locked,
     required this.onPlace,
     this.playhead,
-    this.canvasHeight = 132,
+    this.canvasHeight = 180,
+    this.windowStart = 0,
+    this.windowEnd,
+    this.onZoom,
   });
 
   final WaveformBars bars;
@@ -66,6 +73,9 @@ class ManualFocusWaveform extends StatefulWidget {
   final double? playhead;
 
   final double canvasHeight;
+  final double windowStart;
+  final double? windowEnd;
+  final ValueChanged<double>? onZoom;
 
   /// 放点回调。[isMove] 区分按下（挑最近端点）与拖动（沿用当前端点）。
   final void Function(double seconds, {required bool isMove}) onPlace;
@@ -80,10 +90,13 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
   double? _width;
   bool _dragging = false;
 
+  double get _end => widget.windowEnd ?? widget.duration;
+  double get _span => math.max(0.001, _end - widget.windowStart);
+
   double _timeAt(double dx) {
     final w = _width ?? 1;
     final pct = (dx / w).clamp(0.0, 1.0);
-    return pct * widget.duration;
+    return widget.windowStart + pct * _span;
   }
 
   void _down(PointerDownEvent e) {
@@ -112,46 +125,62 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        _segmentLane(rm),
-        const SizedBox(height: 6),
-        SizedBox(
-          height: _flagPad + widget.canvasHeight,
-          child: LayoutBuilder(
-            builder: (context, c) {
-              _width = c.maxWidth;
-              final w = c.maxWidth;
-              return MouseRegion(
-                cursor: _cursor,
-                child: Listener(
-                  onPointerDown: _down,
-                  onPointerMove: _move,
-                  onPointerUp: _up,
-                  onPointerCancel: (_) => _dragging = false,
-                  behavior: HitTestBehavior.opaque,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: _FocusWavePainter(
-                            rm: rm,
-                            bars: widget.bars,
-                            beats: widget.beats,
-                            duration: widget.duration,
-                            accent: widget.accent,
-                            handles: widget.handles,
-                            topPad: _flagPad,
-                            barsHeight: widget.canvasHeight,
+        if (widget.duration > 0 &&
+            widget.segments.any(
+              (segment) =>
+                  segment.end > widget.windowStart && segment.start < _end,
+            )) ...[
+          _segmentLane(rm),
+          const SizedBox(height: 6),
+        ],
+        WaveformZoomGesture(
+          onZoom: widget.onZoom,
+          child: SizedBox(
+            height: _flagPad + widget.canvasHeight,
+            child: LayoutBuilder(
+              builder: (context, c) {
+                _width = c.maxWidth;
+                final w = c.maxWidth;
+                return MouseRegion(
+                  cursor: _cursor,
+                  child: Listener(
+                    onPointerDown: _down,
+                    onPointerMove: _move,
+                    onPointerUp: _up,
+                    onPointerCancel: (_) => _dragging = false,
+                    behavior: HitTestBehavior.opaque,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _FocusWavePainter(
+                              rm: rm,
+                              bars: widget.bars,
+                              beats: widget.beats,
+                              duration: widget.duration,
+                              windowStart: widget.windowStart,
+                              windowEnd: _end,
+                              accent: widget.accent,
+                              handles: widget.handles,
+                              topPad: _flagPad,
+                              barsHeight: widget.canvasHeight,
+                            ),
                           ),
                         ),
-                      ),
-                      for (final h in widget.handles) _handle(rm, h, w),
-                      if (widget.playhead != null) _playheadLine(rm, w),
-                    ],
+                        for (final h in widget.handles)
+                          if (h.t >= widget.windowStart && h.t <= _end)
+                            _handle(rm, h, w),
+                        if (widget.playhead != null &&
+                            widget.playhead! >= widget.windowStart &&
+                            widget.playhead! <= _end)
+                          _playheadLine(rm, w),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
         const SizedBox(height: 6),
@@ -170,12 +199,17 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
       child: Row(
         children: [
           for (final s in widget.segments)
-            Expanded(
-              flex: (((s.end - s.start) / widget.duration) * 1000)
-                  .clamp(1, 1000)
-                  .round(),
-              child: _segBlock(rm, s),
-            ),
+            if (s.end > widget.windowStart && s.start < _end)
+              Expanded(
+                flex:
+                    (((math.min(s.end, _end) -
+                                    math.max(s.start, widget.windowStart)) /
+                                _span) *
+                            1000)
+                        .clamp(1, 1000)
+                        .round(),
+                child: _segBlock(rm, s),
+              ),
         ],
       ),
     );
@@ -183,7 +217,10 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
 
   Widget _segBlock(RmTheme rm, Segment s) {
     final (bg, fg) = _segColors(rm, s.label);
-    final wide = (s.end - s.start) / widget.duration > 0.06;
+    final wide =
+        (math.min(s.end, _end) - math.max(s.start, widget.windowStart)) /
+            _span >
+        0.06;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 1),
       child: Container(
@@ -206,7 +243,7 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
 
   // --- 端点旗标 ----------------------------------------------------------
   Widget _handle(RmTheme rm, FocusHandle h, double w) {
-    final x = (h.t / widget.duration).clamp(0.0, 1.0) * w;
+    final x = ((h.t - widget.windowStart) / _span).clamp(0.0, 1.0) * w;
     final opacity = h.dim ? 0.45 : 1.0;
     final gripSize = h.active ? 20.0 : 16.0;
     return Positioned(
@@ -271,7 +308,8 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
   }
 
   Widget _playheadLine(RmTheme rm, double w) {
-    final x = (widget.playhead! / widget.duration).clamp(0.0, 1.0) * w;
+    final x =
+        ((widget.playhead! - widget.windowStart) / _span).clamp(0.0, 1.0) * w;
     return Positioned(
       left: x - 0.75,
       top: _flagPad - 2,
@@ -288,7 +326,7 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
         for (int i = 0; i <= 5; i++) ...[
           if (i != 0) const Spacer(),
           Text(
-            _shortLabel(widget.duration * i / 5),
+            _shortLabel(widget.windowStart + _span * i / 5),
             style: RmText.mono(9.5, color: rm.fg4),
           ),
         ],
@@ -297,11 +335,7 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
   }
 }
 
-String _shortLabel(double t) {
-  final m = t ~/ 60;
-  final s = (t % 60).floor();
-  return '$m:${s.toString().padLeft(2, '0')}';
-}
+String _shortLabel(double t) => formatEditorTimecode(t);
 
 /// 段落泳道配色 —— intro/outro 中性、verse 蓝、chorus 绿、bridge 琥珀。
 (Color, Color) _segColors(RmTheme rm, String label) {
@@ -326,6 +360,8 @@ class _FocusWavePainter extends CustomPainter {
     required this.handles,
     required this.topPad,
     required this.barsHeight,
+    required this.windowStart,
+    required this.windowEnd,
   });
 
   final RmTheme rm;
@@ -336,13 +372,16 @@ class _FocusWavePainter extends CustomPainter {
   final List<FocusHandle> handles;
   final double topPad;
   final double barsHeight;
+  final double windowStart, windowEnd;
 
-  double _x(double t, double width) => (t / duration) * width;
+  double _x(double t, double width) =>
+      ((t - windowStart) / math.max(0.001, windowEnd - windowStart)) * width;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (duration <= 0) return;
     final width = size.width;
+    canvas.clipRect(Offset.zero & size);
     final centerY = topPad + barsHeight / 2;
 
     // 循环阴影带（A→B）
@@ -363,6 +402,7 @@ class _FocusWavePainter extends CustomPainter {
     // 每拍网格线（downbeat 更重）
     if (beats.isNotEmpty) {
       for (int i = 0; i < beats.length; i++) {
+        if (beats[i] < windowStart || beats[i] > windowEnd) continue;
         final x = _x(beats[i], width);
         final down = i % 4 == 0;
         canvas.drawLine(
@@ -387,7 +427,12 @@ class _FocusWavePainter extends CustomPainter {
     );
 
     // 波形 bars（中线对称）
-    final values = bars.values;
+    final values = waveformDisplayEnvelope(
+      bars.values,
+      duration: duration,
+      windowStart: windowStart,
+      windowEnd: windowEnd,
+    );
     if (values.isNotEmpty) {
       final barPaint = Paint()..color = rm.fg3.withAlpha(200);
       final n = values.length;
@@ -408,6 +453,8 @@ class _FocusWavePainter extends CustomPainter {
       old.bars != bars ||
       old.beats != beats ||
       old.duration != duration ||
+      old.windowStart != windowStart ||
+      old.windowEnd != windowEnd ||
       old.accent != accent ||
       old.handles != handles ||
       old.rm != rm ||

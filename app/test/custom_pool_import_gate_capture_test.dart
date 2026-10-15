@@ -20,49 +20,47 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _projectDirKey = 'rm.studio.projectDir';
 
 void main() {
-  testWidgets(
-    'capture custom pool import gate with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      final tempRoot = Directory.systemTemp.createTempSync(
-        'fh_radio_studio_custom_pool_import_capture_',
-      );
-      addTearDown(() {
-        tester.view.resetPhysicalSize();
-        tester.view.resetDevicePixelRatio();
-        if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
-      });
+  testWidgets('capture custom pool import gate with Flutter render tree', (
+    tester,
+  ) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final tempRoot = Directory.systemTemp.createTempSync(
+      'fh_radio_studio_custom_pool_import_capture_',
+    );
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      if (tempRoot.existsSync()) tempRoot.deleteSync(recursive: true);
+    });
 
-      final projectDir = p.join(tempRoot.path, 'project');
-      FhRadioStudioProject.ensure(projectDir);
-      final audioA = File(p.join(projectDir, 'sources', 'User Song.wav'))
-        ..createSync(recursive: true)
-        ..writeAsStringSync('audio', encoding: utf8);
-      final audioB = File(p.join(projectDir, 'sources', 'Night Drive.flac'))
-        ..createSync(recursive: true)
-        ..writeAsStringSync('audio', encoding: utf8);
-      SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+    final projectDir = p.join(tempRoot.path, 'project');
+    FhRadioStudioProject.ensure(projectDir);
+    final audioA = File(p.join(projectDir, 'sources', 'User Song.wav'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('audio', encoding: utf8);
+    final audioB = File(p.join(projectDir, 'sources', 'Night Drive.flac'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('audio', encoding: utf8);
+    SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _captureCustomPoolImportGate(
-        tester,
-        prefs: prefs,
-        controller: _CaptureStudioController(prefs, [audioA.path, audioB.path]),
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'custom_pool_import_gate_regular.png'),
-      );
-      await _captureCustomPoolImportGate(
-        tester,
-        prefs: prefs,
-        controller: _CaptureStudioController(prefs, [audioA.path, audioB.path]),
-        logicalSize: const Size(1365, 1200),
-        outputPath: p.join(outDir.path, 'custom_pool_import_gate_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_CUSTOM_POOL_IMPORT_GATE'] != '1',
-  );
+    await _captureCustomPoolImportGate(
+      tester,
+      prefs: prefs,
+      controller: _CaptureStudioController(prefs, [audioA.path, audioB.path]),
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'custom_pool_import_gate_regular.png'),
+    );
+    await _captureCustomPoolImportGate(
+      tester,
+      prefs: prefs,
+      controller: _CaptureStudioController(prefs, [audioA.path, audioB.path]),
+      logicalSize: const Size(1365, 1200),
+      outputPath: p.join(outDir.path, 'custom_pool_import_gate_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_CUSTOM_POOL_IMPORT_GATE'] != '1');
 }
 
 Future<void> _captureCustomPoolImportGate(

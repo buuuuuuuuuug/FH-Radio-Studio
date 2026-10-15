@@ -6,6 +6,9 @@ import hashlib
 import json
 import os
 import re
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +33,7 @@ LOUDNESS_CACHE_META_KEYS = {"cached_at", "source_size", "source_mtime_ms"}
 _IMPORT_COMPLETE_TAG = "FH_RADIO_STUDIO_IMPORT_COMPLETE"
 _IMPORT_COMPLETE_VALUE = "1"
 _MP4_IMPORT_COMPLETE_KEY = "----:com.fh-radio-studio:import-complete"
+_METADATA_CACHE_THREAD_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,53 @@ def metadata_cache_path(project_dir: Path) -> Path:
     return project_dir / ".fh-radio-studio" / TRACK_METADATA_CACHE_NAME
 
 
+@contextmanager
+def _metadata_cache_write_lock(cache_path: Path, *, timeout_sec: float = 120.0):
+    """Serialize metadata cache read-modify-write transactions across processes."""
+    lock_path = cache_path.with_name(f"{cache_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_sec
+    with _METADATA_CACHE_THREAD_LOCK:
+        with lock_path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                while True:
+                    try:
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"Timed out locking metadata cache: {cache_path}")
+                        time.sleep(0.02)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"Timed out locking metadata cache: {cache_path}")
+                        time.sleep(0.02)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def infer_metadata_cache_path_from_timing_manifest(
     timing_manifest: Optional[str],
 ) -> Optional[Path]:
@@ -212,30 +263,31 @@ def cmd_scan_metadata(args: argparse.Namespace) -> int:
 
     cache_path = metadata_cache_path(project_dir)
     artwork_dir = cache_path.parent / "artwork"
-    entries = _load_cache_entries(cache_path)
-    updated = 0
-    for file in files:
-        key = _cache_key_for_path(project_dir, file)
-        legacy_key = path_key(file)
-        entries[key] = build_track_metadata_cache_entry(
-            file,
-            existing=entries.get(key) or entries.get(legacy_key),
-            artwork_dir=artwork_dir,
-            project_dir=project_dir,
-        )
-        if key != legacy_key:
-            entries.pop(legacy_key, None)
-        updated += 1
+    with _metadata_cache_write_lock(cache_path):
+        entries = _load_cache_entries(cache_path)
+        updated = 0
+        for file in files:
+            key = _cache_key_for_path(project_dir, file)
+            legacy_key = path_key(file)
+            entries[key] = build_track_metadata_cache_entry(
+                file,
+                existing=entries.get(key) or entries.get(legacy_key),
+                artwork_dir=artwork_dir,
+                project_dir=project_dir,
+            )
+            if key != legacy_key:
+                entries.pop(legacy_key, None)
+            updated += 1
 
-    payload: Dict[str, object] = {
-        "schema_version": 2,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "tracks": sorted(
-            entries.values(),
-            key=lambda item: str(item.get("source_ref") or item.get("source") or "").casefold(),
-        ),
-    }
-    write_project_json(cache_path, payload, project_dir=project_dir)
+        payload: Dict[str, object] = {
+            "schema_version": 2,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "tracks": sorted(
+                entries.values(),
+                key=lambda item: str(item.get("source_ref") or item.get("source") or "").casefold(),
+            ),
+        }
+        write_project_json(cache_path, payload, project_dir=project_dir)
 
     summary = {
         "cache": str(cache_path),
@@ -259,19 +311,20 @@ def upsert_track_metadata_cache_entry(
     loudness_analysis: Optional[Dict[str, object]] = None,
 ) -> None:
     project_dir = cache_path.parent.parent
-    entries = _load_cache_entries(cache_path)
-    key = _cache_key_for_path(project_dir, path)
-    legacy_key = path_key(path)
-    entries[key] = build_track_metadata_cache_entry(
-        path,
-        existing=entries.get(key) or entries.get(legacy_key),
-        loudness_analysis=loudness_analysis,
-        artwork_dir=cache_path.parent / "artwork",
-        project_dir=project_dir,
-    )
-    if key != legacy_key:
-        entries.pop(legacy_key, None)
-    _write_cache_entries(cache_path, entries)
+    with _metadata_cache_write_lock(cache_path):
+        entries = _load_cache_entries(cache_path)
+        key = _cache_key_for_path(project_dir, path)
+        legacy_key = path_key(path)
+        entries[key] = build_track_metadata_cache_entry(
+            path,
+            existing=entries.get(key) or entries.get(legacy_key),
+            loudness_analysis=loudness_analysis,
+            artwork_dir=cache_path.parent / "artwork",
+            project_dir=project_dir,
+        )
+        if key != legacy_key:
+            entries.pop(legacy_key, None)
+        _write_cache_entries(cache_path, entries)
 
 
 def build_track_metadata_cache_entry(
@@ -377,10 +430,18 @@ def cached_loudness_analysis_for_path(
 def _load_cache_entries(cache_path: Path) -> Dict[str, Dict[str, object]]:
     if not cache_path.exists():
         return {}
-    try:
-        decoded = json.loads(cache_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    last_error: Optional[Exception] = None
+    for attempt in range(50):
+        try:
+            decoded = json.loads(cache_path.read_text(encoding="utf-8"))
+            break
+        except (OSError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == 49:
+                raise RuntimeError(
+                    f"Existing metadata cache could not be read safely: {cache_path}"
+                ) from last_error
+            time.sleep(0.02)
     if not isinstance(decoded, dict):
         return {}
     tracks = decoded.get("tracks")

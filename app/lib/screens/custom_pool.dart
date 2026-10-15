@@ -1,13 +1,37 @@
+import '../widgets/quick_assign_dialog.dart';
+import '../widgets/timing_export_dialog.dart';
+import '../state/library_columns.dart';
+import 'package:flutter/gestures.dart';
+import '../widgets/timing_import_dialog.dart';
+import '../core/seam_audition_player.dart';
+import '../state/audition_preferences.dart';
+import '../widgets/audition_settings_button.dart';
+import '../state/editor_navigation.dart';
+import '../state/seamless_batch_state.dart';
+import '../widgets/seamless_batch_progress.dart';
+import '../widgets/contained_scroll.dart';
+import '../widgets/smooth_scroll_to_top.dart';
 import 'dart:io';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../state/layout_options.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:media_kit/media_kit.dart';
 
 import '../core/playlist_plan.dart';
+import '../core/song_browse.dart';
+import '../widgets/song_browse_controls.dart';
+import '../core/studio_audio_players.dart';
 import '../domain/radio_library.dart';
 import '../state/studio_state.dart';
+import '../state/editor_options.dart';
+import '../state/waveform_batch_state.dart';
+import '../widgets/waveform_batch_progress.dart';
 import '../state/custom_pool_tracks.dart';
 import '../state/playlist_catalog_state.dart';
 import '../state/playlist_plan_state.dart';
@@ -30,6 +54,20 @@ import 'playlist/playlist_state.dart' show playlistPlanFromCatalog;
 
 enum _PoolFilter { all, unconfigured, configured }
 
+final _poolOffsets = <String, double>{};
+final _poolFilters = <String, _PoolFilter>{};
+final _poolBrowse = <String, SongBrowse>{};
+
+final _poolGameAssignmentsProvider = Provider<PlaylistPlan>((ref) {
+  final catalog = ref.watch(gamePlaylistCatalogProvider);
+  if (catalog.failed) return const PlaylistPlan.empty();
+  return playlistPlanFromCatalog(
+    catalog,
+    ref.watch(realPoolTracksProvider),
+    includeBuiltinTargets: false,
+  );
+});
+
 class CustomPoolScreen extends ConsumerStatefulWidget {
   const CustomPoolScreen({super.key});
 
@@ -40,22 +78,198 @@ class CustomPoolScreen extends ConsumerStatefulWidget {
 class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
   _PoolFilter _filter = _PoolFilter.all;
   bool _msrOnly = false;
+  late final ScrollController _scroll;
+  Player? _preview;
+  Timer? _previewTimer;
+  int _previewGeneration = 0;
+  String? _previewKey;
+  SongBrowse _browse = const SongBrowse();
+
+  @override
+  void initState() {
+    super.initState();
+    final project = ref.read(studioProvider).projectDir;
+    _filter = _poolFilters[project] ?? _PoolFilter.all;
+    _browse = _poolBrowse[project] ?? const SongBrowse();
+    _scroll = ScrollController(initialScrollOffset: _poolOffsets[project] ?? 0);
+    _scroll.addListener(() {
+      _poolOffsets[project] = _scroll.offset;
+      _poolFilters[project] = _filter;
+    });
+  }
+
+  @override
+  void dispose() {
+    _previewGeneration++;
+    unawaited(_seamAudition?.cancel());
+    _previewTimer?.cancel();
+    final player = _preview;
+    if (player != null) unawaited(player.pause());
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  SeamAuditionPlayer? _seamAudition;
+
+  Future<void> _stopPreview({int? request}) async {
+    final generation = request ?? ++_previewGeneration;
+    final audition = _seamAudition;
+    await audition?.cancel();
+    if (generation != _previewGeneration || !mounted) return;
+    _seamAudition = null;
+    _previewTimer?.cancel();
+    if (_preview != null) await _preview!.pause();
+    if (mounted && generation == _previewGeneration) {
+      setState(() => _previewKey = null);
+    }
+  }
+
+  Future<void> _quickPreview(PoolTrack track, String group) async {
+    final key = '${track.id}:$group';
+    final request = ++_previewGeneration;
+    if (_previewKey == key) {
+      await _stopPreview(request: request);
+      return;
+    }
+    await _stopPreview(request: request);
+    if (request != _previewGeneration || !mounted) return;
+    final config = ref
+        .read(trackTimingProvider.notifier)
+        .configForPath(track.source);
+    if (config == null) return;
+    final markers = config.markersSec;
+    final loop = group == 'tl' || group == 'pl';
+    final prefix = group == 'pl' ? 'PostRaceLoop' : 'TrackLoop';
+    final start = loop
+        ? markers['${prefix}Start']
+        : markers[group == 'td' ? 'TrackDrop' : 'PostDrop'];
+    final end = loop ? markers['${prefix}End'] : null;
+    if (start == null || start < 0 || (loop && (end == null || end <= start))) {
+      return;
+    }
+    final generation = request;
+    final player = _preview ??= StudioAudioPlayers.pool;
+    try {
+      // Load paused before seeking so point previews never start at zero.
+      if (StudioAudioPlayers.poolSource != track.source) {
+        await player.open(Media(track.source), play: false);
+        if (player.state.duration == Duration.zero) {
+          await player.stream.duration
+              .firstWhere((duration) => duration > Duration.zero)
+              .timeout(const Duration(seconds: 10));
+        }
+        if (generation != _previewGeneration || !mounted) return;
+        StudioAudioPlayers.poolSource = track.source;
+      }
+      if (generation != _previewGeneration || !mounted) return;
+      final diagnosticPreview =
+          Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] == '1';
+      await player.setVolume(
+        diagnosticPreview ? 0 : ref.read(auditionPreferencesProvider).volume,
+      );
+      if (loop) {
+        late final SeamAuditionPlayer audition;
+        audition = SeamAuditionPlayer(
+          player: player,
+          start: start,
+          end: end!,
+          options: ref.read(auditionPreferencesProvider),
+          muted: diagnosticPreview,
+          isCurrent: () =>
+              mounted &&
+              generation == _previewGeneration &&
+              identical(_seamAudition, audition),
+          onDone: () {
+            if (mounted) setState(() => _previewKey = null);
+          },
+          onError: (error) {
+            if (mounted) {
+              setState(() => _previewKey = null);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('循环试听失败：$error')));
+            }
+          },
+        );
+        _seamAudition = audition;
+        setState(() => _previewKey = key);
+        await audition.start();
+        return;
+      }
+      final native = player.platform;
+      if (native is NativePlayer) {
+        await (native as dynamic).setProperty('end', 'none');
+        await (native as dynamic).setProperty('ab-loop-a', 'no');
+        await (native as dynamic).setProperty('ab-loop-b', 'no');
+        if (loop) {
+          await (native as dynamic).setProperty(
+            'ab-loop-a',
+            start.toStringAsFixed(6),
+          );
+          await (native as dynamic).setProperty(
+            'ab-loop-b',
+            end!.toStringAsFixed(6),
+          );
+        }
+        final position = loop ? math.max(start, end! - 3) : start;
+        await (native as dynamic).command([
+          'seek',
+          position.toStringAsFixed(6),
+          'absolute+exact',
+        ]);
+        native.state = native.state.copyWith(completed: false);
+      } else {
+        await player.seek(
+          Duration(
+            microseconds: ((loop ? math.max(start, end! - 3) : start) * 1000000)
+                .round(),
+          ),
+        );
+      }
+      if (generation != _previewGeneration || !mounted) return;
+      setState(() => _previewKey = key);
+      await player.play();
+      _previewTimer = Timer(
+        const Duration(seconds: 12),
+        () => unawaited(_stopPreview()),
+      );
+      if (diagnosticPreview) {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (generation != _previewGeneration || !mounted) return;
+        final actual = native is NativePlayer
+            ? await (native as dynamic).getProperty('time-pos')
+            : '${player.state.position.inMicroseconds / 1000000}';
+        stderr.writeln(
+          'QUICK_PREVIEW group=$group marker=$start loop_end=$end position=$actual',
+        );
+      }
+    } on Object catch (error) {
+      if (mounted && generation == _previewGeneration) {
+        await _stopPreview();
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('试听失败：$error')));
+        }
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AuditionPreferences>(auditionPreferencesProvider, (_, next) {
+      if (_preview != null &&
+          Platform.environment['FH_RADIO_STUDIO_PREVIEW_DIAGNOSTICS'] != '1') {
+        unawaited(_preview!.setVolume(next.volume));
+      }
+    });
     final all = ref.watch(realPoolTracksProvider);
     final cli = ref.watch(studioProvider);
     final sirenImport = ref.watch(sirenImportQueueProvider);
     final sirenImporting = sirenImport.importing || cli.busyLabel == '导入塞壬唱片';
     final playlistPlan = ref.watch(effectivePlaylistPlanProvider);
     final gameCatalog = ref.watch(gamePlaylistCatalogProvider);
-    final gameAssignmentPlan = gameCatalog.failed
-        ? const PlaylistPlan.empty()
-        : playlistPlanFromCatalog(
-            gameCatalog,
-            all,
-            includeBuiltinTargets: false,
-          );
+    final gameAssignmentPlan = ref.watch(_poolGameAssignmentsProvider);
     final gameAssignmentsKnown = _gameAssignmentsKnown(cli, gameCatalog);
     final latestPackage = cli.pendingPackageSummary ?? cli.lastPackageSummary;
     final configured = all.where((t) => t.configured).toList();
@@ -65,11 +279,16 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     final panelTracks = _msrOnly ? msrTracks : all;
     final panelConfigured = panelTracks.where((t) => t.configured).toList();
     final panelUnconfigured = panelTracks.where((t) => !t.configured).toList();
-    final visible = _sortForEditing(switch (_filter) {
-      _PoolFilter.all => panelTracks,
-      _PoolFilter.unconfigured => panelUnconfigured,
-      _PoolFilter.configured => panelConfigured,
-    });
+    final possibleDuplicates = duplicateSongs(all);
+    final visible = browseSongs(
+      _sortForEditing(switch (_filter) {
+        _PoolFilter.all => panelTracks,
+        _PoolFilter.unconfigured => panelUnconfigured,
+        _PoolFilter.configured => panelConfigured,
+      }),
+      _browse,
+      duplicates: possibleDuplicates,
+    );
     final customRadios = kRadios
         .where((r) => kStationModes[r.code] == StationMode.custom)
         .toList();
@@ -82,42 +301,98 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
       overlayKey: const ValueKey('custom-pool-import-gate'),
       childOpacity: 0.42,
       borderRadius: BorderRadius.zero,
-      child: SizedBox.expand(
-        child: SingleChildScrollView(
+      child: ContainedScroll(
+        controller: _scroll,
+        child: SizedBox.expand(
           child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: RmTokens.pageDefault),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(40, 36, 40, 96),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: _LibraryCanvas(
+              constraints: BoxConstraints(
+                maxWidth: ref
+                    .watch(layoutOptionsProvider)
+                    .pageWidth(RmTokens.pageDefault),
+              ),
+              child: SmoothScrollToTop(
+                controller: _scroll,
+                child: Stack(
                   children: [
-                    _pageHead(context, cli, sirenImporting: sirenImporting),
-                    const SizedBox(height: 28),
-                    _statRow(
-                      context,
-                      total: all.length,
-                      configured: configured.length,
-                      unconfigured: unconfigured.length,
-                      unassigned: unassigned.length,
+                    CustomScrollView(
+                      controller: _scroll,
+                      scrollCacheExtent: const ScrollCacheExtent.pixels(200),
+                      slivers: [
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(40, 24, 40, 64),
+                          sliver: SliverMainAxisGroup(
+                            slivers: [
+                              SliverToBoxAdapter(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _pageHead(
+                                      context,
+                                      cli,
+                                      sirenImporting: sirenImporting,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _sourceDirectories(context, all, cli),
+                                    const WaveformBatchProgress(),
+                                    const SeamlessBatchProgress(),
+                                    const SizedBox(height: 16),
+                                    _statRow(
+                                      context,
+                                      total: all.length,
+                                      configured: configured.length,
+                                      unconfigured: unconfigured.length,
+                                      unassigned: unassigned.length,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    if (possibleDuplicates.isNotEmpty) ...[
+                                      RmButton(
+                                        size: RmButtonSize.sm,
+                                        onPressed: () => setState(() {
+                                          _filter = _PoolFilter.all;
+                                          _browse = _browse.copyWith(
+                                            filter: SongFilter.duplicates,
+                                          );
+                                          _poolBrowse[cli.projectDir] = _browse;
+                                        }),
+                                        leading: const RmIcon('copy', size: 12),
+                                        label:
+                                            '发现 ${possibleDuplicates.length} 组可能重复的歌曲，点击查看',
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              _tracksPanel(
+                                context,
+                                totalCount: panelTracks.length,
+                                visible: visible,
+                                cli: cli,
+                                unconfiguredCount: panelUnconfigured.length,
+                                configuredCount: panelConfigured.length,
+                                msrCount: msrTracks.length,
+                                latestPackage: latestPackage,
+                                playlistPlan: playlistPlan,
+                                gameAssignmentPlan: gameAssignmentPlan,
+                                gameAssignmentsKnown: gameAssignmentsKnown,
+                                sirenImporting: sirenImporting,
+                              ),
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 14),
+                                  child: _infoBanner(
+                                    context,
+                                    customRadios: customRadios,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 24),
-                    _tracksPanel(
-                      context,
-                      totalCount: panelTracks.length,
-                      visible: visible,
-                      cli: cli,
-                      unconfiguredCount: panelUnconfigured.length,
-                      configuredCount: panelConfigured.length,
-                      msrCount: msrTracks.length,
-                      latestPackage: latestPackage,
-                      playlistPlan: playlistPlan,
-                      gameAssignmentPlan: gameAssignmentPlan,
-                      gameAssignmentsKnown: gameAssignmentsKnown,
-                      sirenImporting: sirenImporting,
-                    ),
-                    const SizedBox(height: 14),
-                    _infoBanner(context, customRadios: customRadios),
                   ],
                 ),
               ),
@@ -134,62 +409,170 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     required bool sirenImporting,
   }) {
     final rm = context.rm;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('自建歌曲', style: RmText.pageH1(color: rm.fg)),
+        const SizedBox(height: 6),
+        Text('配置并确认 6 个时间点后，在「播放列表」中分配到电台。', style: RmText.body(color: rm.fg3)),
+      ],
+    );
+  }
+
+  Wrap _libraryActions(
+    BuildContext context,
+    StudioState cli,
+    bool sirenImporting,
+  ) {
+    final batch = ref.watch(waveformBatchProvider);
+    final loopBatch = ref.watch(seamlessBatchProvider);
+    final seamless = ref.watch(editorOptionsProvider).slmEnabled;
+    final sirenEnabled = ref.watch(editorOptionsProvider).sirenEnabled;
+    final tracks = ref.watch(realPoolTracksProvider);
     final localImporting = cli.busy && cli.busyLabel == '导入自建歌曲';
     final localImportLocked = cli.busy || sirenImporting;
     final sirenNavigationLocked =
         cli.busy && cli.busyLabel != '导入塞壬唱片' && !sirenImporting;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 8,
+      runSpacing: 8,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('自建歌曲', style: RmText.pageH1(color: rm.fg)),
-              const SizedBox(height: 6),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
-                child: Text(
-                  '你导入的所有曲目。每首歌都需要配置 6 个时间点后才能用于游戏。在「播放列表」里把它们分配到电台。',
-                  style: RmText.body(color: rm.fg3),
-                ),
-              ),
-            ],
-          ),
+        RmButton(
+          onPressed: _openFirstInputFolder,
+          leading: const RmIcon('folder', size: 12),
+          label: '打开目录',
         ),
-        Row(
-          children: [
-            RmButton(
-              onPressed: _openFirstInputFolder,
-              leading: const RmIcon('folder', size: 12),
-              label: '打开目录',
-            ),
-            const SizedBox(width: 8),
-            RmButton(
-              onPressed: sirenNavigationLocked
-                  ? null
-                  : () => context.go(RmRoutes.siren),
-              leading: sirenImporting
-                  ? const _ButtonSpinner()
-                  : const RmIcon('spark', size: 12),
-              label: sirenImporting ? '塞壬导入中' : '塞壬唱片',
-              tooltip: sirenImporting
-                  ? '塞壬唱片正在导入，点击查看进度'
-                  : sirenNavigationLocked
-                  ? '当前正在导入自建歌曲'
-                  : null,
-            ),
-            const SizedBox(width: 8),
-            RmButton(
-              onPressed: localImportLocked ? null : _pickMusicFiles,
-              variant: RmButtonVariant.primary,
-              leading: const RmIcon('import', size: 12),
-              label: localImporting ? '导入中' : '导入新曲目',
-              tooltip: sirenImporting ? '塞壬唱片正在导入，完成后可导入本地歌曲' : null,
-            ),
-          ],
+        RmButton(
+          label: batch.running ? '分析波形 ${batch.done}/${batch.total}' : '分析全部波形',
+          leading: batch.running
+              ? const _ButtonSpinner()
+              : const RmIcon('refresh', size: 12),
+          tooltip: '只分析并缓存波形，不运行 AI，不修改歌曲点位',
+          onPressed:
+              batch.running || loopBatch.running || cli.busy || tracks.isEmpty
+              ? null
+              : () => unawaited(
+                  ref.read(waveformBatchProvider.notifier).start(tracks),
+                ),
+        ),
+        if (seamless)
+          RmButton(
+            label: loopBatch.running
+                ? '分析循环 ${loopBatch.done}/${loopBatch.total}'
+                : '分析全部循环',
+            leading: loopBatch.running
+                ? const _ButtonSpinner()
+                : const RmIcon('loop', size: 12),
+            tooltip: '缓存最多 10 个 SeamlessLoopMusic 建议，不修改或确认时间点',
+            onPressed:
+                batch.running || loopBatch.running || cli.busy || tracks.isEmpty
+                ? null
+                : () => unawaited(
+                    ref.read(seamlessBatchProvider.notifier).start(tracks),
+                  ),
+          ),
+        if (sirenEnabled || sirenImporting) ...[
+          RmButton(
+            onPressed: sirenNavigationLocked
+                ? null
+                : () => context.go(RmRoutes.siren),
+            leading: sirenImporting
+                ? const _ButtonSpinner()
+                : const RmIcon('spark', size: 12),
+            label: sirenImporting ? '塞壬导入中' : '塞壬唱片',
+            tooltip: sirenImporting
+                ? '塞壬唱片正在导入，点击查看进度'
+                : sirenNavigationLocked
+                ? '当前正在导入自建歌曲'
+                : null,
+          ),
+        ],
+        RmButton(
+          onPressed: localImportLocked ? null : _pickMusicFiles,
+          variant: RmButtonVariant.primary,
+          leading: const RmIcon('import', size: 12),
+          label: localImporting ? '导入中' : '导入新曲目',
+          tooltip: sirenImporting ? '塞壬唱片正在导入，完成后可导入本地歌曲' : null,
         ),
       ],
+    );
+  }
+
+  Widget _sourceDirectories(
+    BuildContext context,
+    List<PoolTrack> tracks,
+    StudioState cli,
+  ) {
+    final dirs =
+        tracks.isEmpty
+              ? ['${cli.projectDir}\\sources']
+              : tracks.map((t) => File(t.source).parent.path).toSet().toList()
+          ..sort();
+    final label = dirs.join(' · ');
+    final importing =
+        ref.watch(sirenImportQueueProvider).importing ||
+        cli.busyLabel == '导入塞壬唱片';
+    final actions = _libraryActions(context, cli, importing);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final directory = Row(
+          key: const ValueKey('pool-source-directory'),
+          children: [
+            RmIcon('folder', size: 12, color: context.rm.fg3),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Tooltip(
+                message: label,
+                child: Text(
+                  '来源目录 $label',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: RmText.mono(11, color: context.rm.fg3),
+                ),
+              ),
+            ),
+          ],
+        );
+        // Reserve the actual labels' widths, including text scaling and busy labels.
+        var actionsWidth = 8.0 * (actions.children.length - 1);
+        for (final button in actions.children.cast<RmButton>()) {
+          final measure = TextPainter(
+            text: TextSpan(
+              text: button.label,
+              style: RmText.sans(
+                12.5,
+                weight: button.variant == RmButtonVariant.primary
+                    ? FontWeight.w600
+                    : FontWeight.w500,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+            textScaler: MediaQuery.textScalerOf(context),
+            maxLines: 1,
+          )..layout();
+          actionsWidth += measure.width.ceilToDouble() + 50;
+          measure.dispose();
+        }
+        final controls = KeyedSubtree(
+          key: const ValueKey('pool-library-actions'),
+          child: actions,
+        );
+        if (constraints.maxWidth >= actionsWidth + 16 + 220) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: directory),
+              const SizedBox(width: 16),
+              SizedBox(width: actionsWidth, child: controls),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [directory, const SizedBox(height: 10), controls],
+        );
+      },
     );
   }
 
@@ -257,56 +640,100 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     required bool sirenImporting,
   }) {
     final rm = context.rm;
-    return RmPanel(
-      title: '曲目',
-      titleTrailing: _MsrOnlySwitch(
-        value: _msrOnly,
-        count: msrCount,
-        onChanged: (value) => setState(() => _msrOnly = value),
-      ),
-      noPad: true,
-      headerTrailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          RmSegmented<_PoolFilter>(
-            value: _filter,
-            onChanged: (v) => setState(() => _filter = v),
-            options: [
-              RmSegmentedOption(
-                value: _PoolFilter.all,
-                label: '全部 · $totalCount',
-              ),
-              RmSegmentedOption(
-                value: _PoolFilter.unconfigured,
-                label: '待完成 · $unconfiguredCount',
-              ),
-              RmSegmentedOption(
-                value: _PoolFilter.configured,
-                label: '已完成 · $configuredCount',
-              ),
-            ],
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: RmPanel(
+            title: '曲目',
+            titleTrailing: Wrap(
+              spacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _MsrOnlySwitch(
+                  value: _msrOnly,
+                  count: msrCount,
+                  onChanged: (value) => setState(() => _msrOnly = value),
+                ),
+                const RmChip(
+                  label: '仅自建歌曲可编辑',
+                  variant: RmChipVariant.muted,
+                  showDot: true,
+                ),
+              ],
+            ),
+            noPad: true,
+            headerTrailing: Wrap(
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                const TimingImportButton(),
+                const TimingExportButton(),
+                const AuditionSettingsButton(),
+                RmSegmented<_PoolFilter>(
+                  value: _filter,
+                  onChanged: (v) => setState(() {
+                    _filter = v;
+                    _browse = _browse.copyWith(filter: SongFilter.all);
+                    _poolBrowse[cli.projectDir] = _browse;
+                  }),
+                  options: [
+                    RmSegmentedOption(
+                      value: _PoolFilter.all,
+                      label: '全部 · $totalCount',
+                    ),
+                    RmSegmentedOption(
+                      value: _PoolFilter.unconfigured,
+                      label: '待完成 · $unconfiguredCount',
+                    ),
+                    RmSegmentedOption(
+                      value: _PoolFilter.configured,
+                      label: '已完成 · $configuredCount',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                SongBrowseControls(
+                  value: _browse,
+                  onChanged: (v) => setState(() {
+                    if (v.filter != _browse.filter) _filter = _PoolFilter.all;
+                    _browse = v;
+                    _poolBrowse[cli.projectDir] = v;
+                  }),
+                ),
+                _PoolHeaderRow(),
+              ],
+            ),
           ),
-          const SizedBox(width: 12),
-          RmChip(
-            label: '仅自建歌曲可编辑',
-            variant: RmChipVariant.muted,
-            showDot: true,
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          _PoolHeaderRow(),
-          if (visible.isEmpty)
-            _empty(
+        ),
+        if (visible.isEmpty)
+          SliverToBoxAdapter(
+            child: _empty(
               context,
               cli,
               msrOnly: _msrOnly,
               sirenImporting: sirenImporting,
-            )
-          else
-            for (int i = 0; i < visible.length; i++)
-              _PoolRow(
+            ),
+          )
+        else
+          DecoratedSliver(
+            decoration: BoxDecoration(
+              color: rm.panel,
+              border: Border(
+                left: BorderSide(color: rm.border),
+                right: BorderSide(color: rm.border),
+                bottom: BorderSide(color: rm.border),
+              ),
+            ),
+            sliver: SliverFixedExtentList.builder(
+              itemExtent: 72 * MediaQuery.textScalerOf(context).scale(1),
+              itemCount: visible.length,
+              itemBuilder: (context, i) => _PoolRow(
+                key: ValueKey('pool-row:${visible[i].id}'),
                 track: visible[i],
                 isLast: i == visible.length - 1,
                 divider: rm.border,
@@ -320,11 +747,22 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                   visible[i].source,
                 ),
                 gameAssignmentsKnown: gameAssignmentsKnown,
-                onTap: () => context.go(RmRoutes.editor(visible[i].id)),
+                onPreview: (group) =>
+                    unawaited(_quickPreview(visible[i], group)),
+                previewKey: _previewKey,
+                onTap: () {
+                  _poolFilters[cli.projectDir] = _filter;
+                  unawaited(_stopPreview());
+                  ref
+                      .read(editorSongQueueProvider.notifier)
+                      .begin(cli.projectDir, visible.map((t) => t.id));
+                  context.go(RmRoutes.editor(visible[i].id));
+                },
                 onDelete: () => _confirmAndDeleteTrack(context, visible[i]),
               ),
-        ],
-      ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -347,7 +785,11 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
           ),
           const SizedBox(height: 16),
           RmButton(
-            onPressed: cli.busy || (!msrOnly && sirenImporting)
+            onPressed:
+                cli.busy ||
+                    (msrOnly &&
+                        !ref.watch(editorOptionsProvider).sirenEnabled) ||
+                    (!msrOnly && sirenImporting)
                 ? null
                 : (msrOnly
                       ? () => context.go(RmRoutes.siren)
@@ -525,41 +967,163 @@ class _ButtonSpinner extends StatelessWidget {
   }
 }
 
-class _PoolHeaderRow extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final rm = context.rm;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: rm.border)),
-      ),
-      child: Row(
-        children: [
-          const SizedBox(width: 36 + 16),
-          Expanded(flex: 14, child: _h(context, '曲目')),
-          const SizedBox(width: 16),
-          Expanded(flex: 12, child: _h(context, '来源文件')),
-          const SizedBox(width: 16),
-          SizedBox(width: 220, child: _h(context, '分配至')),
-          const SizedBox(width: 16),
-          SizedBox(width: 110, child: _h(context, '配置')),
-          const SizedBox(width: 16),
-          SizedBox(width: 90, child: _h(context, '添加')),
-          const SizedBox(width: 110),
-        ],
-      ),
-    );
+class _PoolTableLayout {
+  _PoolTableLayout(double width, [Map<String, double> saved = const {}])
+    : compact = width < 1200,
+      assignment = width >= 1000,
+      details = width >= 760 {
+    final columns =
+        3 + (assignment ? 1 : 0) + (details ? (compact ? 2 : 3) : 0);
+    final fixed = 36 + 48 + 16 * (columns - 1);
+    final others =
+        (assignment ? (compact ? 130 : 200) : 0) +
+        (details ? ((compact ? 64 : 86) + (compact ? 0 : 144) + 144) : 0) +
+        160 +
+        124;
+    specs = [
+      LibraryColumnSpec('song', width < 660 ? 80 : 96, width - fixed - others),
+      if (assignment) LibraryColumnSpec('assignment', 104, compact ? 130 : 200),
+      if (details) ...[
+        LibraryColumnSpec('configuration', 64, compact ? 64 : 86),
+        if (!compact) const LibraryColumnSpec('added', 112, 126),
+        const LibraryColumnSpec('modified', 112, 128),
+      ],
+      LibraryColumnSpec('preview', width < 660 ? 132 : 144, 160),
+      LibraryColumnSpec('actions', 124, 124),
+    ];
+    widths = fitLibraryColumns(width - fixed, specs, saved);
   }
+  final bool compact, assignment, details;
+  late final List<LibraryColumnSpec> specs;
+  late final Map<String, double> widths;
+  double get songWidth => widths['song']!;
+  double get assignmentWidth => widths['assignment'] ?? 0;
+  double get configurationWidth => widths['configuration'] ?? 0;
+  double get addedWidth => widths['added'] ?? 0;
+  double get modifiedWidth => widths['modified'] ?? 0;
+  double get previewWidth => widths['preview']!;
+  double get previewButtonWidth => ((previewWidth - 16) / 4).clamp(29.0, 36.0);
+  double get actionWidth => widths['actions']!;
+}
 
+class _PoolHeaderRow extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => LayoutBuilder(
+    builder: (context, c) {
+      final rm = context.rm;
+      final layout = _PoolTableLayout(
+        c.maxWidth,
+        ref.watch(libraryColumnsProvider),
+      );
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: rm.border)),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 48),
+            cell(context, ref, layout, 'song', _h(context, '曲目')),
+            if (layout.assignment) ...[
+              cell(context, ref, layout, 'assignment', _h(context, '分配至')),
+            ],
+            if (layout.details) ...[
+              cell(context, ref, layout, 'configuration', _h(context, '配置')),
+              if (!layout.compact)
+                cell(context, ref, layout, 'added', _h(context, '添加')),
+              cell(
+                context,
+                ref,
+                layout,
+                'modified',
+                _h(context, layout.compact ? '添加 / 最后修改' : '最后修改'),
+              ),
+            ],
+            cell(context, ref, layout, 'preview', _h(context, '快速试听')),
+            cell(context, ref, layout, 'actions', _h(context, '操作')),
+          ],
+        ),
+      );
+    },
+  );
+  Widget cell(
+    BuildContext context,
+    WidgetRef ref,
+    _PoolTableLayout layout,
+    String id,
+    Widget child,
+  ) => SizedBox(
+    width: layout.widths[id]! + (id == 'actions' ? 0 : 16),
+    child: Stack(
+      clipBehavior: Clip.none,
+      children: [
+        SizedBox(
+          width: layout.widths[id],
+          height: 22,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: KeyedSubtree(
+              key: ValueKey('pool-column-title-$id'),
+              child: child,
+            ),
+          ),
+        ),
+        if (id != 'actions')
+          Positioned(
+            right: 2,
+            top: 0,
+            bottom: 0,
+            width: 12,
+            child: Tooltip(
+              message: '拖动调整列宽；双击恢复默认',
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  key: ValueKey('pool-column-grip-$id'),
+                  behavior: HitTestBehavior.opaque,
+                  dragStartBehavior: DragStartBehavior.down,
+                  onHorizontalDragStart: (d) => ref
+                      .read(libraryColumnsProvider.notifier)
+                      .beginResize(
+                        layout.specs,
+                        layout.widths,
+                        layout.specs.indexWhere((s) => s.id == id),
+                        d.globalPosition.dx,
+                      ),
+                  onHorizontalDragUpdate: (d) => ref
+                      .read(libraryColumnsProvider.notifier)
+                      .updateResize(d.globalPosition.dx),
+                  onHorizontalDragEnd: (_) =>
+                      ref.read(libraryColumnsProvider.notifier).endResize(),
+                  onHorizontalDragCancel: () =>
+                      ref.read(libraryColumnsProvider.notifier).endResize(),
+                  onDoubleTap: () =>
+                      ref.read(libraryColumnsProvider.notifier).reset(),
+                  child: Center(
+                    child: Container(
+                      width: 1,
+                      height: 14,
+                      color: context.rm.borderStrong,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
   Widget _h(BuildContext context, String s) => Text(
-    s.toUpperCase(),
-    style: RmText.mono(10.5, color: context.rm.fg3, letterSpacing: 0.1 * 10.5),
+    s,
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: RmText.mono(10.5, color: context.rm.fg3, letterSpacing: 1.05),
   );
 }
 
-class _PoolRow extends StatefulWidget {
+class _PoolRow extends ConsumerStatefulWidget {
   const _PoolRow({
+    super.key,
     required this.track,
     required this.isLast,
     required this.divider,
@@ -571,6 +1135,8 @@ class _PoolRow extends StatefulWidget {
     required this.gameAssignmentsKnown,
     required this.onTap,
     required this.onDelete,
+    required this.onPreview,
+    required this.previewKey,
   });
 
   final PoolTrack track;
@@ -584,12 +1150,14 @@ class _PoolRow extends StatefulWidget {
   final bool gameAssignmentsKnown;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final void Function(String) onPreview;
+  final String? previewKey;
 
   @override
-  State<_PoolRow> createState() => _PoolRowState();
+  ConsumerState<_PoolRow> createState() => _PoolRowState();
 }
 
-class _PoolRowState extends State<_PoolRow> {
+class _PoolRowState extends ConsumerState<_PoolRow> {
   bool _hover = false;
 
   @override
@@ -608,9 +1176,6 @@ class _PoolRowState extends State<_PoolRow> {
       hasPackage: widget.latestPackage != null,
     );
     final art = _hover ? rm.accent.base : rm.fg3;
-    final sourceDisplay = t.isSiren
-        ? '${t.sourceLabel ?? 'MSR'} · ${t.albumName ?? t.source}'
-        : t.source;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -619,141 +1184,234 @@ class _PoolRowState extends State<_PoolRow> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
           decoration: BoxDecoration(
             color: _hover ? rm.raised : Colors.transparent,
             border: widget.isLast
                 ? null
                 : Border(bottom: BorderSide(color: widget.divider)),
           ),
-          child: Row(
-            children: [
-              _PoolArtwork(track: t, iconColor: art),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 14,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final layout = _PoolTableLayout(
+                c.maxWidth + 36,
+                ref.watch(libraryColumnsProvider),
+              );
+              return Row(
+                children: [
+                  _PoolArtwork(track: t, iconColor: art),
+                  const SizedBox(width: 16),
+                  SizedBox(
+                    key: ValueKey('pool-value-song:${t.id}'),
+                    width: layout.songWidth,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(
-                            t.title,
-                            style: RmText.rowTitle(color: rm.fg),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                t.title,
+                                style: RmText.rowTitle(color: rm.fg),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (t.isSiren) ...[
+                              const SizedBox(width: 8),
+                              const RmChip(
+                                label: 'MSR',
+                                variant: RmChipVariant.accent,
+                                showDot: true,
+                              ),
+                            ],
+                          ],
                         ),
-                        if (t.isSiren) ...[
-                          const SizedBox(width: 8),
-                          const RmChip(
-                            label: 'MSR',
-                            variant: RmChipVariant.accent,
-                            showDot: true,
+                        const SizedBox(height: 2),
+                        Text(
+                          t.isSiren && t.albumName != null
+                              ? '${t.artist} · ${t.albumName} · ${formatDurationShort(t.durationSec)} · ${t.bpm} BPM · ${t.key}'
+                              : '${t.artist} · ${formatDurationShort(t.durationSec)} · ${t.bpm} BPM · ${t.key}',
+                          style: RmText.mono(11.5, color: rm.fg3),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (!layout.assignment) ...[
+                          const SizedBox(height: 2),
+                          Tooltip(
+                            message: preparedTag.tooltip,
+                            child: Text(
+                              preparedTag.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: RmText.mono(10.5, color: rm.fg3),
+                            ),
                           ),
                         ],
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      t.isSiren && t.albumName != null
-                          ? '${t.artist} · ${t.albumName} · ${formatDurationShort(t.durationSec)} · ${t.bpm} BPM · ${t.key}'
-                          : '${t.artist} · ${formatDurationShort(t.durationSec)} · ${t.bpm} BPM · ${t.key}',
-                      style: RmText.mono(11.5, color: rm.fg3),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 12,
-                child: Text(
-                  sourceDisplay,
-                  style: RmText.mono(11, color: rm.fg3),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 220,
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: [
-                    _assignmentChip(
-                      prefix: '游戏',
-                      assignmentLabel: gameAssignmentLabel,
-                      known: widget.gameAssignmentsKnown,
-                      assignedVariant: RmChipVariant.accent,
-                    ),
-                    Tooltip(
-                      message: preparedTag.tooltip,
-                      waitDuration: const Duration(milliseconds: 350),
-                      child: RmChip(
-                        label: preparedTag.label,
-                        variant: preparedTag.variant,
-                        showDot: true,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 110,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ProgressBars(value: t.confirmed),
-                    const SizedBox(height: 4),
-                    Text(
-                      t.configured ? '已配置' : '${t.confirmed}/4',
-                      style: RmText.mono(
-                        10.5,
-                        color: t.configured ? rm.accent.base : rm.fg3,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 90,
-                child: Text(t.added, style: RmText.mono(11, color: rm.fg3)),
-              ),
-              SizedBox(
-                width: 110,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 120),
-                  opacity: _hover ? 1 : 0.4,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      RmButton(
-                        onPressed: widget.onTap,
-                        size: RmButtonSize.sm,
-                        label: t.configured ? '查看' : '继续配置',
-                      ),
-                      const SizedBox(width: 4),
-                      RmButton.icon(
-                        onPressed: widget.editingLocked
-                            ? null
-                            : widget.onDelete,
-                        icon: const RmIcon('trash', size: 12),
-                        variant: RmButtonVariant.ghost,
-                        tooltip: widget.editingLocked
-                            ? widget.editLockMessage
-                            : '删除',
-                      ),
-                    ],
                   ),
-                ),
-              ),
-            ],
+                  const SizedBox(width: 16),
+                  if (layout.assignment) ...[
+                    SizedBox(
+                      key: ValueKey('pool-value-assignment:${t.id}'),
+                      width: layout.assignmentWidth,
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          _assignmentChip(
+                            prefix: '游戏',
+                            assignmentLabel: gameAssignmentLabel,
+                            known: widget.gameAssignmentsKnown,
+                            assignedVariant: RmChipVariant.accent,
+                          ),
+                          Tooltip(
+                            message: preparedTag.tooltip,
+                            waitDuration: const Duration(milliseconds: 350),
+                            child: RmChip(
+                              label: preparedTag.label,
+                              variant: preparedTag.variant,
+                              showDot: true,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  if (layout.details) ...[
+                    SizedBox(
+                      key: ValueKey('pool-value-configuration:${t.id}'),
+                      width: layout.configurationWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ProgressBars(value: t.confirmed),
+                          const SizedBox(height: 4),
+                          Text(
+                            t.configured ? '已配置' : '${t.confirmed}/4',
+                            style: RmText.mono(
+                              10.5,
+                              color: t.configured ? rm.accent.base : rm.fg3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    if (!layout.compact) ...[
+                      SizedBox(
+                        key: ValueKey('pool-value-added:${t.id}'),
+                        width: layout.addedWidth,
+                        child: Text(
+                          t.added,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: RmText.mono(11, color: rm.fg3),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                    ],
+                    SizedBox(
+                      key: ValueKey('pool-value-modified:${t.id}'),
+                      width: layout.modifiedWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (layout.compact)
+                            Text(
+                              t.added,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: RmText.mono(11, color: rm.fg3),
+                            ),
+                          Text(
+                            formatSongModifiedMinute(t.modifiedAt),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: RmText.mono(11, color: rm.fg3),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  SizedBox(
+                    key: ValueKey('pool-value-preview:${t.id}'),
+                    width: layout.previewWidth,
+                    child: Row(
+                      children: [
+                        for (final group in const ['td', 'pd', 'tl', 'pl'])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: SizedBox(
+                              width: layout.previewButtonWidth,
+                              child: RmButton(
+                                key: ValueKey('pool-preview:${t.id}:$group'),
+                                size: RmButtonSize.sm,
+                                horizontalPadding: 3,
+                                foregroundColor: rm.fg3,
+                                tooltip: '试听 ${group.toUpperCase()}',
+                                onPressed: t.configured
+                                    ? () => widget.onPreview(group)
+                                    : null,
+                                label: widget.previewKey == '${t.id}:$group'
+                                    ? null
+                                    : group.toUpperCase(),
+                                leading: widget.previewKey == '${t.id}:$group'
+                                    ? const Icon(Icons.stop, size: 10)
+                                    : null,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  SizedBox(
+                    key: ValueKey('pool-value-actions:${t.id}'),
+                    width: layout.actionWidth,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 120),
+                      opacity: _hover ? 1 : 0.4,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          RmButton(
+                            onPressed: widget.onTap,
+                            size: RmButtonSize.sm,
+                            label: t.configured ? '查看' : '配置',
+                          ),
+                          const SizedBox(width: 4),
+                          RmButton.icon(
+                            onPressed: widget.editingLocked
+                                ? null
+                                : () => showQuickAssign(context, t),
+                            icon: const Icon(Icons.playlist_add, size: 14),
+                            tooltip: '快速分配电台',
+                          ),
+                          const SizedBox(width: 4),
+                          RmButton.icon(
+                            onPressed: widget.editingLocked
+                                ? null
+                                : widget.onDelete,
+                            icon: const RmIcon('trash', size: 12),
+                            variant: RmButtonVariant.ghost,
+                            tooltip: widget.editingLocked
+                                ? widget.editLockMessage
+                                : '删除',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -1168,4 +1826,22 @@ class _MsrOnlySwitch extends StatelessWidget {
       ),
     );
   }
+}
+
+class _LibraryCanvas extends StatelessWidget {
+  const _LibraryCanvas({required this.constraints, required this.child});
+  final BoxConstraints constraints;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: constraints,
+    child: LayoutBuilder(
+      builder: (context, c) => c.maxWidth >= 540
+          ? child
+          : SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(width: 540, height: c.maxHeight, child: child),
+            ),
+    ),
+  );
 }

@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/fh_radio_studio_cli.dart';
+import 'core/windows_close_guard.dart';
 import 'state/app_state.dart';
 import 'state/studio_state.dart';
 import 'state/router.dart';
+import 'state/unsaved_edits.dart';
+import 'state/playlist_plan_state.dart';
 import 'theme/app_theme.dart';
 
 class FhRadioStudioApp extends ConsumerStatefulWidget {
@@ -19,20 +23,48 @@ class FhRadioStudioApp extends ConsumerStatefulWidget {
 
 class _FhRadioStudioAppState extends ConsumerState<FhRadioStudioApp>
     with WidgetsBindingObserver {
+  WindowsCloseGuard? _closeGuard;
+  bool _closeRequested = false;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(studioProvider.notifier).startupFullCheckOnce();
+      _closeGuard = WindowsCloseGuard.install(_requestNativeClose);
+      if (Platform.environment['FH_RADIO_STUDIO_UI_TEST_PROJECT'] == null) {
+        ref.read(studioProvider.notifier).startupFullCheckOnce();
+      }
     });
   }
 
   @override
   Future<ui.AppExitResponse> didRequestAppExit() async {
+    final context = appRouter.routerDelegate.navigatorKey.currentContext;
+    if (context != null &&
+        !await ref.read(unsavedEditsProvider).confirm(context, exiting: true)) {
+      return ui.AppExitResponse.cancel;
+    }
     await FhRadioStudioCli.killActiveProcesses();
     return ui.AppExitResponse.exit;
+  }
+
+  Future<void> _requestNativeClose() async {
+    if (!mounted || _closeRequested) return;
+    _closeRequested = true;
+    try {
+      final context = appRouter.routerDelegate.navigatorKey.currentContext;
+      if (context != null &&
+          !await ref
+              .read(unsavedEditsProvider)
+              .confirm(context, exiting: true)) {
+        return;
+      }
+      await FhRadioStudioCli.killActiveProcesses();
+      _closeGuard?.closeApproved();
+    } finally {
+      _closeRequested = false;
+    }
   }
 
   @override
@@ -44,6 +76,7 @@ class _FhRadioStudioAppState extends ConsumerState<FhRadioStudioApp>
 
   @override
   void dispose() {
+    _closeGuard?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     unawaited(FhRadioStudioCli.killActiveProcesses());
     super.dispose();
@@ -51,15 +84,26 @@ class _FhRadioStudioAppState extends ConsumerState<FhRadioStudioApp>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(playlistPlanProvider.select((_) => true));
     final accent = ref.watch(accentProvider);
+    final customAccent = ref.watch(customAccentProvider);
     final mode = ref.watch(themeModeProvider);
 
     return MaterialApp.router(
-      title: 'FH Radio Studio',
+      title: 'FH Radio Studio · 扩容测试版',
       debugShowCheckedModeBanner: false,
       themeMode: mode,
-      theme: buildAppTheme(brightness: Brightness.light, accent: accent),
-      darkTheme: buildAppTheme(brightness: Brightness.dark, accent: accent),
+      themeAnimationDuration: Duration.zero,
+      theme: buildAppTheme(
+        brightness: Brightness.light,
+        accent: accent,
+        customAccent: customAccent,
+      ),
+      darkTheme: buildAppTheme(
+        brightness: Brightness.dark,
+        accent: accent,
+        customAccent: customAccent,
+      ),
       routerConfig: appRouter,
       builder: (context, child) {
         // 防止系统字体缩放破坏密集 UI

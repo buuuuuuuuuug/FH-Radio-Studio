@@ -1,0 +1,34 @@
+"""Map package paths to a selected, contained game media directory."""
+
+from pathlib import Path, PurePosixPath
+
+from .common import CliError
+
+
+def deployment_relative_path(package_path: str, target_root: str = "mediapc") -> str:
+    if target_root not in {"media", "mediapc"}:
+        raise CliError(f"Unsupported deployment target: {target_root}")
+    raw = str(package_path).replace("\\", "/")
+    parts = PurePosixPath(raw).parts
+    if (
+        not parts
+        or parts[0] != "media"
+        or len(parts) < 3
+        or any(part in {"..", "."} or ":" in part for part in parts)
+    ):
+        raise CliError(f"Unsafe package deployment path: {raw}")
+    return PurePosixPath(target_root, *parts[1:]).as_posix()
+
+
+def contained_game_path(game_dir: Path, relative_path: str) -> Path:
+    root = game_dir.resolve()
+    path = game_dir / Path(*PurePosixPath(relative_path).parts)
+    resolved = path.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise CliError(f"Deployment path escapes game directory: {path}")
+    return path
+
+
+def effective_game_file(game_dir: Path, media_path: str) -> Path:
+    overlay = contained_game_path(game_dir, deployment_relative_path(media_path))
+    return overlay if overlay.is_file() else contained_game_path(game_dir, media_path)

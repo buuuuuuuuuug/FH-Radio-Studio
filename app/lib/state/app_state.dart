@@ -99,3 +99,27 @@ final navStyleProvider = StateNotifierProvider<NavStyleNotifier, NavStyle>((
 // Tweaks panel visibility (per session, not persisted)
 // ============================================================
 final tweaksOpenProvider = StateProvider<bool>((ref) => false);
+
+/// An optional user-selected color; presets remain compatible with older prefs.
+class CustomAccentNotifier extends StateNotifier<Color?> {
+  CustomAccentNotifier(this.prefs)
+    : super(
+        prefs.getInt('rm.customAccent') == null
+            ? null
+            : Color(prefs.getInt('rm.customAccent')!).withAlpha(255),
+      );
+  final SharedPreferences prefs;
+  void set(Color? color) {
+    state = color?.withAlpha(255);
+    if (state == null) {
+      prefs.remove('rm.customAccent');
+    } else {
+      prefs.setInt('rm.customAccent', state!.toARGB32());
+    }
+  }
+}
+
+final customAccentProvider =
+    StateNotifierProvider<CustomAccentNotifier, Color?>(
+      (ref) => CustomAccentNotifier(ref.watch(sharedPreferencesProvider)),
+    );

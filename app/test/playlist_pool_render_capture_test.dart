@@ -21,32 +21,26 @@ import 'package:fh_radio_studio/theme/tokens.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets(
-    'capture playlist pool with Flutter render tree',
-    (tester) async {
-      GoogleFonts.config.allowRuntimeFetching = false;
-      SharedPreferences.setMockInitialValues({
-        'rm.studio.projectDir': 'capture',
-      });
-      final prefs = await SharedPreferences.getInstance();
-      final outDir = Directory(p.join('build', 'visual_qa'))
-        ..createSync(recursive: true);
+  testWidgets('capture playlist pool with Flutter render tree', (tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    SharedPreferences.setMockInitialValues({'rm.studio.projectDir': 'capture'});
+    final prefs = await SharedPreferences.getInstance();
+    final outDir = Directory(p.join('build', 'visual_qa'))
+      ..createSync(recursive: true);
 
-      await _capturePlaylistPool(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 900),
-        outputPath: p.join(outDir.path, 'playlist_regular.png'),
-      );
-      await _capturePlaylistPool(
-        tester,
-        prefs: prefs,
-        logicalSize: const Size(1365, 1800),
-        outputPath: p.join(outDir.path, 'playlist_full.png'),
-      );
-    },
-    skip: Platform.environment['CAPTURE_PLAYLIST_POOL'] != '1',
-  );
+    await _capturePlaylistPool(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 900),
+      outputPath: p.join(outDir.path, 'playlist_regular.png'),
+    );
+    await _capturePlaylistPool(
+      tester,
+      prefs: prefs,
+      logicalSize: const Size(1365, 1800),
+      outputPath: p.join(outDir.path, 'playlist_full.png'),
+    );
+  }, skip: Platform.environment['CAPTURE_PLAYLIST_POOL'] != '1');
 }
 
 Future<void> _capturePlaylistPool(

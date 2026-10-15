@@ -55,7 +55,15 @@ class TrackTimingConfig {
   String get key => keyForPath(source);
 
   bool get allConfirmed =>
-      trackGroupKeys.every((key) => confirmed[key] == true);
+      trackGroupKeys.every((key) => confirmed[key] == true) &&
+      trackMarkerKeys.every(
+        (key) =>
+            markersSec[key] != null &&
+            markersSec[key]!.isFinite &&
+            markersSec[key]! >= 0,
+      ) &&
+      markersSec['TrackLoopEnd']! > markersSec['TrackLoopStart']! &&
+      markersSec['PostRaceLoopEnd']! > markersSec['PostRaceLoopStart']!;
 
   int get confirmedGroupCount =>
       trackGroupKeys.where((key) => confirmed[key] == true).length;
@@ -110,17 +118,25 @@ class TrackTimingStore {
     );
   }
 
-  static Map<String, TrackTimingConfig> readAll(String projectDir) {
+  static Map<String, TrackTimingConfig> readAll(
+    String projectDir, {
+    bool strict = false,
+  }) {
     final file = File(configPath(projectDir));
     if (!file.existsSync()) return const {};
     try {
       final decoded = jsonDecode(file.readAsStringSync(encoding: utf8));
       final tracks = decoded is Map ? decoded['tracks'] : null;
-      if (tracks is! List) return const {};
+      if (tracks is! List) {
+        throw const FormatException('时间点配置格式无效，已保留原文件。');
+      }
       final index = TrackMetadataCache.assetIndex(projectDir);
       final out = <String, TrackTimingConfig>{};
       for (final item in tracks) {
-        if (item is! Map) continue;
+        if (item is! Map) {
+          if (strict) throw const FormatException('时间点记录格式无效，已保留原文件。');
+          continue;
+        }
         var config = TrackTimingConfig.fromJson(
           item.map((key, value) => MapEntry('$key', value)),
         );
@@ -141,13 +157,18 @@ class TrackTimingStore {
             'Legacy project timing source requires migration: ${config.source}',
           );
         }
-        if (config.source.trim().isEmpty) continue;
+        if (config.source.trim().isEmpty) {
+          if (strict) throw const FormatException('无法解析已有歌曲点位，请先恢复元数据或备份。');
+          continue;
+        }
         out[config.key] = config;
       }
       return out;
     } on FormatException {
+      if (strict) rethrow;
       return const {};
     } on FileSystemException {
+      if (strict) rethrow;
       return const {};
     }
   }
@@ -202,13 +223,17 @@ class TrackTimingStore {
   }
 
   static void save(String projectDir, TrackTimingConfig config) {
-    final all = Map<String, TrackTimingConfig>.from(readAll(projectDir));
+    final all = Map<String, TrackTimingConfig>.from(
+      readAll(projectDir, strict: true),
+    );
     all[config.key] = config;
     writeAll(projectDir, all);
   }
 
   static void remove(String projectDir, String source) {
-    final all = Map<String, TrackTimingConfig>.from(readAll(projectDir));
+    final all = Map<String, TrackTimingConfig>.from(
+      readAll(projectDir, strict: true),
+    );
     all.remove(TrackTimingConfig.keyForPath(source));
     writeAll(projectDir, all);
   }

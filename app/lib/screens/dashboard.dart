@@ -1,9 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import '../core/game_deployment_target.dart';
+import '../widgets/editor_options_controls.dart';
+import '../widgets/seamless_loop_options.dart';
+import '../state/editor_options.dart';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../state/layout_options.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -99,7 +104,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     return SingleChildScrollView(
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: RmTokens.pageDefault),
+          constraints: BoxConstraints(
+            maxWidth: ref
+                .watch(layoutOptionsProvider)
+                .pageWidth(RmTokens.pageDefault),
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(40, 28, 40, 96),
             child: Column(
@@ -346,6 +355,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     StudioController c,
   ) async {
     final preview = c.buildPackageLoudnessPreview();
+    final buildPlan = ref.read(effectivePlaylistPlanProvider);
+    var buildQuality = 50;
     final loudnessOffsetLu = await showPackageLoudnessDialog(
       context,
       referenceMedianLufs: preview.referenceMedianLufs,
@@ -355,16 +366,20 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       previewTitle: preview.previewTitle,
       previewArtist: preview.previewArtist,
       currentPackageOffsetLu: preview.currentPackageOffsetLu,
+      sizeEstimate: c.estimatePackageSizes(buildPlan),
+      onQualityChanged: (quality) => buildQuality = quality,
     );
     if (loudnessOffsetLu == null) return;
     if (!context.mounted) return;
     final built = await c.buildPackage(
       loudnessOffsetLu: loudnessOffsetLu,
-      plan: ref.read(effectivePlaylistPlanProvider),
+      quality: buildQuality,
+      plan: buildPlan,
     );
     if (!context.mounted) return;
     final latest = ref.read(studioProvider);
     if (built) {
+      ref.read(playlistPlanProvider.notifier).save();
       final summary = latest.lastPackageSummary;
       await showPackageBuildSuccessDialog(
         context,
@@ -454,12 +469,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       );
       return;
     }
-    final ok = await showDialog<bool>(
+    final target = await showDialog<GameDeploymentTarget>(
       context: context,
       barrierColor: RmTokens.modalBackdrop,
       builder: (context) => _DeployPreflightDialog(state: s),
     );
-    if (ok == true) await c.deployLastPackage();
+    if (target != null) await c.deployLastPackage(target: target);
   }
 
   Future<void> _confirmCreatePristineBaseline(
@@ -657,21 +672,20 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     StudioController c, {
     required bool pending,
   }) async {
-    final ok = await _confirmChecklist(
-      context,
-      title: pending ? '写入测试准备包？' : '写入旧准备包？',
-      body: pending
-          ? '这会强制写入基于新游戏文件重新构建的测试准备包。测试成功后再确认新版本可用。'
-          : '这会强制写入旧准备包。它可能仍能工作，但如果 FH6 文件结构更新过，风险会更高。',
-      action: pending ? '写入测试准备包' : '写入旧准备包',
-      danger: true,
-      checks: const ['我确认 Forza Horizon 6 没有运行', '我理解这是一次强制写入，用于测试当前游戏版本'],
+    final target = await showDialog<GameDeploymentTarget>(
+      context: context,
+      barrierColor: RmTokens.modalBackdrop,
+      builder: (context) => _DeployPreflightDialog(
+        state: ref.read(studioProvider),
+        force: true,
+        pending: pending,
+      ),
     );
-    if (!ok) return;
+    if (target == null) return;
     if (pending) {
-      await c.deployPendingPackage();
+      await c.deployPendingPackage(target: target);
     } else {
-      await c.deployOldPackage();
+      await c.deployOldPackage(target: target);
     }
   }
 
@@ -2462,7 +2476,7 @@ class _SettingsStrip extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '游戏目录 · 显示 / 语音语言槽 · AI Pipeline · 改完后会重新校验',
+                      '游戏与语言 · 分析模式 · 循环同步 · 电台扩容',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: RmText.sans(11.5, color: rm.fg3),
@@ -2491,6 +2505,20 @@ class _SettingsStrip extends StatelessWidget {
             controller: controller,
             gameDirController: gameDirController,
             onPickDirectory: onPickDirectory,
+          ),
+          Material(
+            color: Colors.transparent,
+            child: Column(
+              children: [
+                EditorOptionsControls(
+                  analysisControl: _AiPipelineSetting(
+                    state: state,
+                    controller: controller,
+                  ),
+                ),
+                const SeamlessLoopOptions(),
+              ],
+            ),
           ),
         ],
       ),
@@ -2562,10 +2590,6 @@ class _SettingsCells extends StatelessWidget {
           enabled: !state.busy,
           onChanged: controller.setTargetLang,
         ),
-      ),
-      _SettingCell(
-        flex: 13,
-        child: _AiPipelineSetting(state: state, controller: controller),
       ),
     ];
     return LayoutBuilder(
@@ -2825,20 +2849,28 @@ class _LanguageFlag extends StatelessWidget {
   }
 }
 
-class _AiPipelineSetting extends StatelessWidget {
+class _AiPipelineSetting extends ConsumerWidget {
   const _AiPipelineSetting({required this.state, required this.controller});
 
   final StudioState state;
   final StudioController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return _SettingColumn(
-      label: 'AI Pipeline',
+      label: '分析模式 · AI Pipeline',
       footer: _InlineIconText(
-        icon: _aiPipelineTone(state) == _Tone.warn ? 'warn' : 'check',
-        text: _aiPipelineHelper(state),
-        tone: _aiPipelineTone(state),
+        icon: ref.watch(editorOptionsProvider).manualOnly
+            ? 'check'
+            : _aiPipelineTone(state) == _Tone.warn
+            ? 'warn'
+            : 'check',
+        text: ref.watch(editorOptionsProvider).manualOnly
+            ? '不运行 AI 模型，使用手动精调'
+            : _aiPipelineHelper(state),
+        tone: ref.watch(editorOptionsProvider).manualOnly
+            ? _Tone.ok
+            : _aiPipelineTone(state),
       ),
       child: Container(
         height: 34,
@@ -2850,6 +2882,33 @@ class _AiPipelineSetting extends StatelessWidget {
         ),
         child: Row(
           children: [
+            Expanded(
+              child: InkWell(
+                onTap: state.busy
+                    ? null
+                    : () => ref
+                          .read(editorOptionsProvider.notifier)
+                          .update(manualOnly: true),
+                child: Container(
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: ref.watch(editorOptionsProvider).manualOnly
+                        ? context.rm.accent.base
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '无 AI',
+                    style: RmText.mono(
+                      10.5,
+                      color: ref.watch(editorOptionsProvider).manualOnly
+                          ? context.rm.accent.onAccent
+                          : context.rm.fg3,
+                    ),
+                  ),
+                ),
+              ),
+            ),
             _AiSegment(
               value: 'local-base',
               label: '中杯',
@@ -2875,7 +2934,7 @@ class _AiPipelineSetting extends StatelessWidget {
   }
 }
 
-class _AiSegment extends StatelessWidget {
+class _AiSegment extends ConsumerWidget {
   const _AiSegment({
     required this.value,
     required this.label,
@@ -2889,9 +2948,11 @@ class _AiSegment extends StatelessWidget {
   final StudioController controller;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final rm = context.rm;
-    final active = state.aiProfile == value;
+    final active =
+        !ref.watch(editorOptionsProvider).manualOnly &&
+        state.aiProfile == value;
     return Expanded(
       child: MouseRegion(
         cursor: state.busy
@@ -2900,9 +2961,12 @@ class _AiSegment extends StatelessWidget {
         child: GestureDetector(
           onTap: state.busy
               ? null
-              : () => unawaited(
-                  controller.setAiProfileAndRefreshToolchain(value),
-                ),
+              : () {
+                  ref
+                      .read(editorOptionsProvider.notifier)
+                      .update(manualOnly: false);
+                  unawaited(controller.setAiProfileAndRefreshToolchain(value));
+                },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
             margin: const EdgeInsets.symmetric(horizontal: 1),
@@ -5336,22 +5400,37 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 }
 
+@visibleForTesting
+Widget deploymentDialogForTesting(StudioState state) =>
+    _DeployPreflightDialog(state: state);
+
 class _DeployPreflightDialog extends StatefulWidget {
-  const _DeployPreflightDialog({required this.state});
+  const _DeployPreflightDialog({
+    required this.state,
+    this.force = false,
+    this.pending = false,
+  });
 
   final StudioState state;
+  final bool force;
+  final bool pending;
 
   @override
   State<_DeployPreflightDialog> createState() => _DeployPreflightDialogState();
 }
 
 class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
+  GameDeploymentTarget _target = GameDeploymentTarget.mediapc;
   late bool _exit = !widget.state.gameRunning;
   bool _latest = false;
   bool _modify = false;
 
   bool get _ready =>
-      widget.state.currentPackageReady &&
+      (widget.force
+          ? (widget.pending
+                ? widget.state.pendingPackageReady
+                : widget.state.lastPackageDir != null)
+          : widget.state.currentPackageReady) &&
       !widget.state.baselineIntegrityBroken &&
       _exit &&
       _latest &&
@@ -5377,8 +5456,10 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const _ModalHead(
-              title: '写入游戏前请确认',
+            _ModalHead(
+              title: widget.force
+                  ? (widget.pending ? '写入测试准备包' : '写入旧准备包')
+                  : '写入游戏前请确认',
               eyebrow: 'PRE-FLIGHT',
               overline: '写入前检查',
               icon: 'export',
@@ -5389,8 +5470,34 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'FH Radio Studio 即将把准备包写入 FH6 目录并更新写入指纹。确认下面三项后才能继续。',
+                    '选择电台包的写入位置，然后确认下面三项。',
                     style: RmText.sans(13, color: rm.fg2, height: 1.55),
+                  ),
+                  const SizedBox(height: 14),
+                  Material(
+                    color: Colors.transparent,
+                    child: RadioGroup<GameDeploymentTarget>(
+                      groupValue: _target,
+                      onChanged: (value) {
+                        if (value != null) setState(() => _target = value);
+                      },
+                      child: const Column(
+                        children: [
+                          RadioListTile<GameDeploymentTarget>(
+                            value: GameDeploymentTarget.mediapc,
+                            title: Text('mediapc（默认）'),
+                            subtitle: Text('写入覆盖目录，保留 media 中现有文件'),
+                            dense: true,
+                          ),
+                          RadioListTile<GameDeploymentTarget>(
+                            value: GameDeploymentTarget.media,
+                            title: Text('media（覆盖原文件）'),
+                            subtitle: Text('直接替换游戏原目录中的电台文件'),
+                            dense: true,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 14),
                   Container(
@@ -5407,7 +5514,9 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
                           onChanged: (v) => setState(() => _exit = v),
                         ),
                         _ChecklistItem(
-                          label: '写入的是最近准备好的电台包',
+                          label: widget.force
+                              ? '确认写入所选准备包，用于测试当前游戏版本'
+                              : '写入的是最近准备好的电台包',
                           value: _latest,
                           onChanged: (v) => setState(() => _latest = v),
                         ),
@@ -5423,7 +5532,14 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
                   const SizedBox(height: 14),
                   _ModalFacts(
                     rows: [
-                      ('部署路径', s.lastPackageDeployDir ?? '还没有准备电台包'),
+                      ('写入位置', p.join(s.gameDir, _target.directoryName)),
+                      (
+                        '电台包',
+                        (widget.pending
+                                ? s.pendingPackageDeployDir
+                                : s.lastPackageDeployDir) ??
+                            '还没有准备电台包',
+                      ),
                       ('写入指纹', s.lastAppliedPackageManifest),
                       (
                         '受影响文件',
@@ -5439,7 +5555,7 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
               danger: false,
               enabled: _ready,
               icon: 'export',
-              onConfirm: () => Navigator.of(context).pop(true),
+              onConfirm: () => Navigator.of(context).pop(_target),
             ),
           ],
         ),
@@ -5533,7 +5649,7 @@ class _ModalHead extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           RmButton.icon(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(context).pop(),
             icon: const RmIcon('x', size: 13),
             variant: RmButtonVariant.ghost,
             tooltip: '关闭',
@@ -5572,7 +5688,7 @@ class _ModalFoot extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           RmButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(context).pop(),
             label: '取消',
             size: RmButtonSize.sm,
           ),

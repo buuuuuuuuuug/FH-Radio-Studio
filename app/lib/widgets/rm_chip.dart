@@ -99,11 +99,15 @@ class RmChip extends StatelessWidget {
             ),
             SizedBox(width: gap),
           ],
-          Text(
-            label,
-            style: dense
-                ? RmText.mono(9.5, color: text)
-                : RmText.chip(color: text),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: dense
+                  ? RmText.mono(9.5, color: text)
+                  : RmText.chip(color: text),
+            ),
           ),
         ],
       ),

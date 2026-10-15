@@ -583,6 +583,8 @@ def test_verify_integrity_reports_previous_package_applied(mock_game, full_proje
 
     deploy = run_cli(
         "deploy-package",
+        "--target-root",
+        "media",
         str(full_project.packages_dir / "current" / "package"),
         "--game-dir",
         str(mock_game.game_dir),
@@ -994,6 +996,8 @@ def test_full_project_flow_builds_baseline_and_deploys_to_mock(mock_game, full_p
 
     deploy = run_cli(
         "deploy-package",
+        "--target-root",
+        "media",
         str(package_dir / "package"),
         "--game-dir",
         str(mock_game.game_dir),
@@ -1342,7 +1346,11 @@ def test_build_package_can_stage_language_change_without_playlist(mock_game, tmp
 
     deploy = run_cli(
         "deploy-package",
+        "--target-root",
+        "media",
         str(package_dir / "package"),
+        "--target-root",
+        "media",
         "--game-dir",
         str(mock_game.game_dir),
         "--baseline-manifest",

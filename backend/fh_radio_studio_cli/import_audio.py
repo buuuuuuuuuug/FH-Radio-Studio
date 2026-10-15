@@ -26,7 +26,48 @@ def cmd_import_audio(args: argparse.Namespace) -> int:
 
     cache_path = metadata_cache_path(project_dir)
     imported = []
+    duplicates = []
+    dedup_path = project_dir / ".fh-radio-studio" / "import_dedup_index.json"
+    try:
+        known = json.loads(dedup_path.read_text(encoding="utf-8")) if dedup_path.is_file() else {}
+    except (ValueError, OSError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    by_size = {}
+    for candidate in source_dir.iterdir():
+        if candidate.is_file() and _is_audio_path(candidate):
+            by_size.setdefault(candidate.stat().st_size, []).append(candidate)
     for file in files:
+        digest = sha256_file(file)
+        record = known.get(digest)
+        existing = (
+            project_dir / record["path"]
+            if isinstance(record, dict) and isinstance(record.get("path"), str)
+            else None
+        )
+        if existing is not None and (
+            project_dir not in existing.resolve().parents or not existing.is_file()
+        ):
+            existing = None
+        if existing is not None:
+            stat = existing.stat()
+            if stat.st_size != record.get("size") or stat.st_mtime_ns != record.get("mtime_ns"):
+                existing = None
+        if existing is None:
+            existing = next(
+                (
+                    c
+                    for c in by_size.get(file.stat().st_size, [])
+                    if path_key(c) != path_key(file) and sha256_file(c) == digest
+                ),
+                None,
+            )
+        if existing is not None:
+            duplicates.append(
+                {"source": str(file), "existing": str(existing), "reason": "identical_audio_file"}
+            )
+            continue
         item = import_audio_file(
             file,
             source_dir,
@@ -46,6 +87,17 @@ def cmd_import_audio(args: argparse.Namespace) -> int:
             loudness_analysis=loudness_analysis,
         )
         imported.append(item)
+        stat = dst.stat()
+        known[digest] = {
+            "path": str(dst.relative_to(project_dir)).replace("\\", "/"),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+        by_size.setdefault(dst.stat().st_size, []).append(dst)
+    dedup_path.parent.mkdir(parents=True, exist_ok=True)
+    dedup_temp = dedup_path.with_suffix(".tmp")
+    dedup_temp.write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
+    dedup_temp.replace(dedup_path)
     summary = {
         "schema_version": 1,
         "project_dir": str(project_dir),
@@ -53,6 +105,7 @@ def cmd_import_audio(args: argparse.Namespace) -> int:
         "target_folder": args.target_folder,
         "target_dir": str(source_dir),
         "imported": imported,
+        "duplicates_skipped": duplicates,
         "changed": [item for item in imported if item["action"] == "transcoded"],
     }
     if args.json:

@@ -1,3 +1,4 @@
+import 'package_quality_panel.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -23,6 +24,8 @@ Future<double?> showPackageLoudnessDialog(
   String? previewTitle,
   String? previewArtist,
   double? currentPackageOffsetLu,
+  Future<Map<String, dynamic>>? sizeEstimate,
+  ValueChanged<int>? onQualityChanged,
 }) {
   return showDialog<double>(
     context: context,
@@ -35,6 +38,8 @@ Future<double?> showPackageLoudnessDialog(
       previewTitle: previewTitle,
       previewArtist: previewArtist,
       currentPackageOffsetLu: currentPackageOffsetLu,
+      sizeEstimate: sizeEstimate,
+      onQualityChanged: onQualityChanged,
     ),
   );
 }
@@ -49,6 +54,8 @@ class PackageLoudnessDialog extends StatefulWidget {
     this.previewTitle,
     this.previewArtist,
     this.currentPackageOffsetLu,
+    this.sizeEstimate,
+    this.onQualityChanged,
   });
 
   final double referenceMedianLufs;
@@ -58,6 +65,8 @@ class PackageLoudnessDialog extends StatefulWidget {
   final String? previewTitle;
   final String? previewArtist;
   final double? currentPackageOffsetLu;
+  final Future<Map<String, dynamic>>? sizeEstimate;
+  final ValueChanged<int>? onQualityChanged;
 
   @override
   State<PackageLoudnessDialog> createState() => _PackageLoudnessDialogState();
@@ -77,16 +86,20 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
     final rm = context.rm;
     final targetLufs = widget.referenceMedianLufs + _offsetLu;
     final selectedOption = _loudnessOptionForOffset(_offsetLu);
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 36),
+    return PackageBuildDialogFrame(
+      estimate: widget.sizeEstimate,
+      onQualityChanged: widget.onQualityChanged,
       child: Container(
         width: 640,
         decoration: BoxDecoration(
           color: rm.panel,
-          border: Border.all(color: rm.borderStrong),
-          borderRadius: BorderRadius.circular(RmTokens.rXl),
-          boxShadow: RmTokens.modal,
+          border: widget.onQualityChanged == null
+              ? Border.all(color: rm.borderStrong)
+              : null,
+          borderRadius: widget.onQualityChanged == null
+              ? BorderRadius.circular(RmTokens.rXl)
+              : null,
+          boxShadow: widget.onQualityChanged == null ? RmTokens.modal : null,
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(

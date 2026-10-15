@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 from xml.etree import ElementTree as ET
 
 from .common import PLAN_PREFIX, die, path_key
-from .game import audio_dir_for, radio_info_files, resolve_game_dir
+from .game import effective_audio_dir_for, radio_info_files, resolve_game_dir
 from .metadata import _load_cache_entries  # internal cache reader (path_key -> entry)
 from .metadata import collect_audio_files, guess_track_metadata
 from .package import (
@@ -233,7 +233,7 @@ def reconstruct_playlist_plan(
 
 def cmd_reconstruct_plan(args: argparse.Namespace) -> int:
     game_dir = resolve_game_dir(args.game_dir)
-    game_audio_dir = audio_dir_for(game_dir)
+    game_audio_dir = effective_audio_dir_for(game_dir)
 
     if not args.baseline_manifest:
         die("--baseline-manifest is required to reconstruct a playlist plan.")

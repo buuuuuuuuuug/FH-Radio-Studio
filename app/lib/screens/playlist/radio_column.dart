@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import '../../widgets/contained_scroll.dart';
+import '../../widgets/smooth_scroll_to_top.dart';
 
 import '../../domain/radio_library.dart';
 import '../../theme/app_theme.dart';
@@ -24,6 +25,7 @@ class PlaylistColumn extends StatefulWidget {
     required this.header,
     required this.children,
     this.emptyText,
+    this.filterControls,
   }) : itemCount = children.length,
        itemBuilder = null;
 
@@ -34,6 +36,7 @@ class PlaylistColumn extends StatefulWidget {
     required this.itemCount,
     required this.itemBuilder,
     this.emptyText,
+    this.filterControls,
   }) : children = const [];
 
   /// 普通电台列 (custom or builtin)
@@ -42,6 +45,8 @@ class PlaylistColumn extends StatefulWidget {
     required bool isCustom,
     required int count,
     int? capacity,
+    int pendingCount = 0,
+    int? originalCount,
     required List<Widget> children,
     VoidCallback? onRestoreBuiltin,
   }) {
@@ -51,7 +56,9 @@ class PlaylistColumn extends StatefulWidget {
         radio: radio,
         isCustom: isCustom,
         count: count,
+        pendingCount: pendingCount,
         capacity: capacity ?? radio.slot,
+        originalCount: originalCount ?? radio.slot,
         onRestoreBuiltin: onRestoreBuiltin,
       ),
       emptyText: isCustom ? '空 · 拖入池中曲目' : '无原版数据',
@@ -59,10 +66,37 @@ class PlaylistColumn extends StatefulWidget {
     );
   }
 
+  factory PlaylistColumn.radioBuilder({
+    required RadioStation radio,
+    required bool isCustom,
+    required int count,
+    int? capacity,
+    int pendingCount = 0,
+    int? originalCount,
+    required int itemCount,
+    required IndexedWidgetBuilder itemBuilder,
+    VoidCallback? onRestoreBuiltin,
+  }) => PlaylistColumn.builder(
+    kind: isCustom ? ColumnKind.customRadio : ColumnKind.builtinRadio,
+    header: _RadioHeader(
+      radio: radio,
+      isCustom: isCustom,
+      count: count,
+      pendingCount: pendingCount,
+      capacity: capacity ?? radio.slot,
+      originalCount: originalCount ?? radio.slot,
+      onRestoreBuiltin: onRestoreBuiltin,
+    ),
+    itemCount: itemCount,
+    itemBuilder: itemBuilder,
+    emptyText: isCustom ? '空 · 拖入池中曲目' : '无原版数据',
+  );
+
   factory PlaylistColumn.poolBuilder({
     required int count,
     required int itemCount,
     required IndexedWidgetBuilder itemBuilder,
+    Widget? filterControls,
   }) {
     return PlaylistColumn.builder(
       kind: ColumnKind.pool,
@@ -70,6 +104,7 @@ class PlaylistColumn extends StatefulWidget {
       emptyText: '没有导入歌曲',
       itemCount: itemCount,
       itemBuilder: itemBuilder,
+      filterControls: filterControls,
     );
   }
 
@@ -79,32 +114,18 @@ class PlaylistColumn extends StatefulWidget {
   final int itemCount;
   final IndexedWidgetBuilder? itemBuilder;
   final String? emptyText;
+  final Widget? filterControls;
 
   @override
   State<PlaylistColumn> createState() => _PlaylistColumnState();
 }
 
 class _PlaylistColumnState extends State<PlaylistColumn> {
-  bool _ctrlPressed = HardwareKeyboard.instance.isControlPressed;
-
-  @override
-  void initState() {
-    super.initState();
-    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
-  }
-
+  final _scroll = ScrollController();
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _scroll.dispose();
     super.dispose();
-  }
-
-  bool _handleKeyEvent(KeyEvent event) {
-    final next = HardwareKeyboard.instance.isControlPressed;
-    if (next != _ctrlPressed && mounted) {
-      setState(() => _ctrlPressed = next);
-    }
-    return false;
   }
 
   @override
@@ -114,11 +135,17 @@ class _PlaylistColumnState extends State<PlaylistColumn> {
     final pool = widget.kind == ColumnKind.pool;
 
     final Color bg = pool ? rm.raised : rm.panel;
-    final Color borderColor = pool ? Colors.transparent : rm.border;
+    final pending =
+        widget.header is _RadioHeader &&
+        (widget.header as _RadioHeader).pendingCount > 0;
+    final Color borderColor = pool
+        ? Colors.transparent
+        : pending
+        ? rm.warn.withAlpha(150)
+        : rm.border;
 
     final borderRadius = BorderRadius.circular(RmTokens.rLg);
     final content = Container(
-      constraints: const BoxConstraints(minHeight: 480),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: bg,
@@ -139,9 +166,9 @@ class _PlaylistColumnState extends State<PlaylistColumn> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(
+                padding: EdgeInsets.symmetric(
                   horizontal: 14,
-                  vertical: 12,
+                  vertical: pool ? 7 : 12,
                 ),
                 decoration: BoxDecoration(
                   border: Border(bottom: BorderSide(color: rm.border)),
@@ -155,26 +182,36 @@ class _PlaylistColumnState extends State<PlaylistColumn> {
                 ),
                 child: _meta(context),
               ),
+              if (widget.filterControls != null) widget.filterControls!,
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.all(8),
-                  child: widget.itemCount == 0
-                      ? _empty(context)
-                      : ListView.separated(
-                          primary: false,
-                          physics: builtin && !_ctrlPressed
-                              ? const NeverScrollableScrollPhysics()
-                              : const ClampingScrollPhysics(),
-                          itemCount: widget.itemCount,
-                          separatorBuilder: (_, _) => const SizedBox(height: 4),
-                          itemBuilder: (context, i) {
-                            final itemBuilder = widget.itemBuilder;
-                            if (itemBuilder != null) {
-                              return itemBuilder(context, i);
-                            }
-                            return widget.children[i];
-                          },
-                        ),
+                  child: SmoothScrollToTop(
+                    controller: _scroll,
+                    enabled: pool,
+                    compact: true,
+                    bottom: 18,
+                    child: ContainedScroll(
+                      controller: _scroll,
+                      child: widget.itemCount == 0
+                          ? _empty(context)
+                          : ListView.separated(
+                              primary: false,
+                              controller: _scroll,
+                              physics: const ClampingScrollPhysics(),
+                              itemCount: widget.itemCount,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 4),
+                              itemBuilder: (context, i) {
+                                final itemBuilder = widget.itemBuilder;
+                                if (itemBuilder != null) {
+                                  return itemBuilder(context, i);
+                                }
+                                return widget.children[i];
+                              },
+                            ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -194,15 +231,36 @@ class _PlaylistColumnState extends State<PlaylistColumn> {
   }
 
   Widget _meta(BuildContext context) {
-    return widget.header is _RadioHeader
-        ? Text(
-            '${(widget.header as _RadioHeader).count} / ${(widget.header as _RadioHeader).capacity}',
-            style: RmText.mono(10.5, color: context.rm.fg3),
-          )
-        : Text(
-            '${(widget.header as _PoolHeader).count} 首',
-            style: RmText.mono(10.5, color: context.rm.fg3),
-          );
+    final rm = context.rm;
+    if (widget.header is _RadioHeader) {
+      final header = widget.header as _RadioHeader;
+      final count = header.capacity == 4096
+          ? '${header.count} 首 · 原有 ${header.originalCount} 首 · 扩容'
+          : '${header.count} / ${header.capacity}';
+      return Wrap(
+        spacing: 8,
+        runSpacing: 2,
+        children: [
+          Text(count, style: RmText.mono(10.5, color: rm.fg3)),
+          if (header.pendingCount > 0)
+            Tooltip(
+              message: '此电台有未完成或未确认的歌曲，完成并保存后才能构建。双击歌曲可编辑。',
+              child: Text(
+                '⚠ ${header.pendingCount} 首未完成',
+                style: RmText.sans(
+                  10.5,
+                  weight: FontWeight.w600,
+                  color: rm.warn,
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    return Text(
+      '${(widget.header as _PoolHeader).count} 首',
+      style: RmText.mono(10.5, color: rm.fg3),
+    );
   }
 
   Widget _empty(BuildContext context) {
@@ -226,6 +284,8 @@ class _RadioHeader extends StatelessWidget {
     required this.isCustom,
     required this.count,
     required this.capacity,
+    this.pendingCount = 0,
+    required this.originalCount,
     this.onRestoreBuiltin,
   });
 
@@ -233,6 +293,8 @@ class _RadioHeader extends StatelessWidget {
   final bool isCustom;
   final int count;
   final int capacity;
+  final int pendingCount;
+  final int originalCount;
   final VoidCallback? onRestoreBuiltin;
 
   @override

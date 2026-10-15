@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/delayed_repeat.dart';
 
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
@@ -27,6 +28,9 @@ class RmButton extends StatefulWidget {
     this.size = RmButtonSize.md,
     this.tooltip,
     this.disabled = false,
+    this.repeat = false,
+    this.foregroundColor,
+    this.horizontalPadding,
   });
 
   const RmButton.icon({
@@ -36,6 +40,9 @@ class RmButton extends StatefulWidget {
     this.variant = RmButtonVariant.defaultBtn,
     this.tooltip,
     this.disabled = false,
+    this.repeat = false,
+    this.foregroundColor,
+    this.horizontalPadding,
   }) : leading = icon,
        label = null,
        trailing = null,
@@ -49,6 +56,9 @@ class RmButton extends StatefulWidget {
   final RmButtonSize size;
   final String? tooltip;
   final bool disabled;
+  final bool repeat;
+  final Color? foregroundColor;
+  final double? horizontalPadding;
 
   @override
   State<RmButton> createState() => _RmButtonState();
@@ -57,6 +67,21 @@ class RmButton extends StatefulWidget {
 class _RmButtonState extends State<RmButton> {
   bool _hover = false;
   bool _pressed = false;
+  final _repeat = DelayedRepeat();
+  bool _didRepeat = false;
+  @override
+  void dispose() {
+    _repeat.stop();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant RmButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.disabled || widget.onPressed == null || !widget.repeat) {
+      _repeat.stop();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +145,7 @@ class _RmButtonState extends State<RmButton> {
         border = rm.danger;
     }
 
+    fg = widget.foregroundColor ?? fg;
     final children = <Widget>[
       if (widget.leading != null) widget.leading!,
       if (widget.label != null) ...[
@@ -130,6 +156,7 @@ class _RmButtonState extends State<RmButton> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             softWrap: false,
+            textAlign: TextAlign.center,
             style: RmText.sans(
               fontSize,
               weight:
@@ -152,7 +179,9 @@ class _RmButtonState extends State<RmButton> {
     final inner = AnimatedContainer(
       duration: const Duration(milliseconds: 120),
       height: height,
-      padding: padding,
+      padding: widget.horizontalPadding == null
+          ? padding
+          : EdgeInsets.symmetric(horizontal: widget.horizontalPadding!),
       width: isIcon ? height : null,
       transform: _pressed
           ? (Matrix4.identity()..translateByDouble(0, 0.5, 0, 0))
@@ -178,12 +207,42 @@ class _RmButtonState extends State<RmButton> {
     Widget gestures = MouseRegion(
       cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
       onEnter: disabled ? null : (_) => setState(() => _hover = true),
-      onExit: disabled ? null : (_) => setState(() => _hover = false),
+      onExit: disabled
+          ? null
+          : (_) {
+              _repeat.stop();
+              setState(() => _hover = false);
+            },
       child: GestureDetector(
-        onTapDown: disabled ? null : (_) => setState(() => _pressed = true),
-        onTapUp: disabled ? null : (_) => setState(() => _pressed = false),
-        onTapCancel: disabled ? null : () => setState(() => _pressed = false),
-        onTap: disabled ? null : widget.onPressed,
+        onTapDown: disabled
+            ? null
+            : (_) {
+                _didRepeat = false;
+                setState(() => _pressed = true);
+                if (widget.repeat) {
+                  _repeat.start(() {
+                    _didRepeat = true;
+                    widget.onPressed?.call();
+                  });
+                }
+              },
+        onTapUp: disabled
+            ? null
+            : (_) {
+                _repeat.stop();
+                setState(() => _pressed = false);
+              },
+        onTapCancel: disabled
+            ? null
+            : () {
+                _repeat.stop();
+                setState(() => _pressed = false);
+              },
+        onTap: disabled
+            ? null
+            : () {
+                if (!_didRepeat) widget.onPressed?.call();
+              },
         child: Opacity(opacity: disabled ? 0.4 : 1, child: inner),
       ),
     );

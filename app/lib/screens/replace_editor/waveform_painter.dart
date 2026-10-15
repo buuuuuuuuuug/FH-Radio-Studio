@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
 import '../../domain/replacement_models.dart';
+import '../../domain/waveform_envelope.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import 'group_colors.dart';
@@ -14,8 +16,8 @@ import 'group_colors.dart';
 /// 6. markers（6 个时间点：TD/PD/TL-A/TL-B/PL-A/PL-B），含顶部 flag
 /// 7. playhead（白线 + 轻微 glow）
 ///
-/// 布局：top padding 18px 给 flag 留位 → bars 区 130px → 6 gap → segments 24px。
-/// 总高 = 178。time axis 由父 widget 单独渲染。
+/// 布局：top padding 18px 给 flag 留位 → bars 区 180px → 6 gap → segments 24px。
+/// 有可见段落时总高 = 228；无段落时 = 198，time axis 由父 widget 单独渲染。
 class WaveformPainter extends CustomPainter {
   WaveformPainter({
     required this.rm,
@@ -27,8 +29,12 @@ class WaveformPainter extends CustomPainter {
     required this.tlLoop,
     required this.plLoop,
     required this.playhead,
+    this.showWaveform = true,
+    this.windowStart = 0,
+    this.windowEnd,
   });
 
+  final bool showWaveform;
   final RmTheme rm;
   final WaveformBars bars;
   final List<double> beats;
@@ -38,26 +44,43 @@ class WaveformPainter extends CustomPainter {
   final ({double start, double end})? tlLoop;
   final ({double start, double end})? plLoop;
   final double playhead;
+  final double windowStart;
+  final double? windowEnd;
 
   static const double flagPad = 18;
-  static const double barsHeight = 130;
+  static const double barsHeight = 180;
   static const double gap = 6;
   static const double segHeight = 24;
   static const double totalHeight =
-      flagPad + barsHeight + gap + segHeight; // 178
+      flagPad + barsHeight + gap + segHeight; // 228
 
-  double _x(double t, double width) => (t / duration) * width;
+  static double heightForWindow(
+    List<Segment> segments,
+    double start,
+    double end,
+  ) =>
+      flagPad +
+      barsHeight +
+      (segments.any((s) => s.end > s.start && s.end > start && s.start < end)
+          ? gap + segHeight
+          : 0);
+
+  double _x(double t, double width) =>
+      ((t - windowStart) /
+          math.max(0.001, (windowEnd ?? duration) - windowStart)) *
+      width;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (duration <= 0 || bars.values.isEmpty) return;
     final width = size.width;
+    canvas.clipRect(Offset.zero & size);
 
     // ------------------------------------------------------------
     // Loop shades — drawn behind bars
     // ------------------------------------------------------------
     final shadeTop = flagPad;
-    final shadeBottom = flagPad + barsHeight + gap + segHeight;
+    final shadeBottom = flagPad + barsHeight;
     if (tlLoop != null) {
       _drawShade(
         canvas,
@@ -106,11 +129,16 @@ class WaveformPainter extends CustomPainter {
     // Bars
     // ------------------------------------------------------------
     final barPaint = Paint()..color = rm.fg3.withAlpha(204); // 0.8
-    final n = bars.values.length;
+    final values = waveformDisplayEnvelope(
+      bars.values,
+      duration: duration,
+      windowStart: windowStart,
+      windowEnd: windowEnd,
+    );
+    final n = values.length;
     final barWidth = width / n * 0.85;
-    for (int i = 0; i < n; i++) {
-      final v = bars.values[i];
-      final h = v * (barsHeight / 2 - 4);
+    for (int i = 0; showWaveform && i < n; i++) {
+      final h = values[i] * (barsHeight / 2 - 4);
       final x = n == 1 ? width / 2 : (i / (n - 1)) * width;
       canvas.drawRect(
         Rect.fromLTWH(x - barWidth / 2, centerY - h, barWidth, h * 2),
@@ -127,7 +155,12 @@ class WaveformPainter extends CustomPainter {
       letterSpacing: 0,
       fontFamilyFallback: const ['monospace'],
     );
-    for (final s in segments) {
+    for (final s in segments.where(
+      (s) =>
+          s.end > s.start &&
+          s.end > windowStart &&
+          s.start < (windowEnd ?? duration),
+    )) {
       final x0 = _x(s.start, width);
       final x1 = _x(s.end, width);
       final (Color bg, Color fg) = _segColors(s.label);
@@ -169,7 +202,7 @@ class WaveformPainter extends CustomPainter {
           : groupAccent(rm, m.kind!).base;
       // stem
       canvas.drawRect(
-        Rect.fromLTWH(x - 1, flagPad, 2, barsHeight + gap + segHeight),
+        Rect.fromLTWH(x - 1, flagPad, 2, barsHeight),
         Paint()..color = color.withAlpha(217), // 0.85
       );
       // flag (above the stem)
@@ -182,12 +215,7 @@ class WaveformPainter extends CustomPainter {
     final phX = _x(playhead, width);
     final phColor = rm.fg;
     canvas.drawRect(
-      Rect.fromLTWH(
-        phX - 0.5,
-        flagPad - 2,
-        1,
-        barsHeight + gap + segHeight + 2,
-      ),
+      Rect.fromLTWH(phX - 0.5, flagPad - 2, 1, barsHeight + 2),
       Paint()..color = phColor.withAlpha(230),
     );
     // tiny triangle on top
@@ -268,6 +296,9 @@ class WaveformPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(WaveformPainter old) =>
+      old.showWaveform != showWaveform ||
+      old.windowStart != windowStart ||
+      old.windowEnd != windowEnd ||
       old.playhead != playhead ||
       old.markers != markers ||
       old.beats != beats ||
@@ -312,12 +343,12 @@ class ZoomStripPainter extends CustomPainter {
     );
 
     // bars
-    final n = bars.values.length;
+    final values = waveformDisplayEnvelope(bars.values, duration: duration);
+    final n = values.length;
     final barPaint = Paint()..color = rm.fg4.withAlpha(204);
     final barW = width / n * 0.85;
     for (int i = 0; i < n; i++) {
-      final v = bars.values[i];
-      final h = v * (height / 2 - 2);
+      final h = values[i] * (height / 2 - 2);
       final x = n == 1 ? width / 2 : (i / (n - 1)) * width;
       canvas.drawRect(
         Rect.fromLTWH(x - barW / 2, centerY - h, barW, h * 2),

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import 'app_info.dart';
+import 'atomic_file.dart';
 import 'siren_catalog.dart';
 
 const defaultSirenAudioCacheMaxBytes = 2 * 1024 * 1024 * 1024;
@@ -411,7 +412,8 @@ class SirenAudioCache {
   Future<void> _writeManifest(_SirenCacheManifest manifest) async {
     final file = File(_manifestPath);
     await file.parent.create(recursive: true);
-    await file.writeAsString(
+    await writeTextAtomically(
+      file,
       const JsonEncoder.withIndent('  ').convert({
         'schema_version': 1,
         'max_bytes': maxBytes,
@@ -419,7 +421,6 @@ class SirenAudioCache {
         'entries': [for (final entry in manifest.entries.values) entry.toJson()]
           ..sort((a, b) => '${a['cid']}'.compareTo('${b['cid']}')),
       }),
-      encoding: utf8,
     );
   }
 

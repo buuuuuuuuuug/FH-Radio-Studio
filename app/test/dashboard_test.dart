@@ -1513,6 +1513,7 @@ class _DashboardTestController extends StudioController {
   @override
   Future<bool> rebuildBaselineFromCurrentGame() async {
     rebuildBaselineCount += 1;
+    PlaylistPlanStore.delete(state.projectDir);
     return true;
   }
 }

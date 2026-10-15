@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import '../state/layout_options.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -12,6 +13,7 @@ import '../core/siren_catalog.dart';
 import '../core/siren_imports.dart';
 import '../state/siren_import_queue_state.dart';
 import '../state/studio_state.dart';
+import '../state/editor_options.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../theme/tokens.dart';
@@ -98,6 +100,14 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!ref.watch(editorOptionsProvider).sirenEnabled) {
+      return Center(
+        child: Text(
+          '塞壬唱片已关闭，可在左侧设置中启用。',
+          style: RmText.body(color: context.rm.fg3),
+        ),
+      );
+    }
     final catalog = ref.watch(sirenCatalogProvider);
     return SizedBox.expand(
       child: ColoredBox(
@@ -167,7 +177,7 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
             ? _sirenPageNarrowPadding
             : _sirenPageWidePadding;
         final contentWidth = math.min(
-          _sirenPageMaxWidth,
+          ref.watch(layoutOptionsProvider).pageWidth(_sirenPageMaxWidth),
           math.max(0.0, viewport.maxWidth - edgePadding * 2),
         );
         final horizontalInset = math.max(
@@ -3290,18 +3300,18 @@ class _SirenStripePainter extends CustomPainter {
   }
 }
 
-class _SirenLoading extends StatelessWidget {
+class _SirenLoading extends ConsumerWidget {
   const _SirenLoading();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return LayoutBuilder(
       builder: (context, viewport) {
         final edgePadding = viewport.maxWidth < 900
             ? _sirenPageNarrowPadding
             : _sirenPageWidePadding;
         final contentWidth = math.min(
-          _sirenPageMaxWidth,
+          ref.watch(layoutOptionsProvider).pageWidth(_sirenPageMaxWidth),
           math.max(0.0, viewport.maxWidth - edgePadding * 2),
         );
         final horizontalInset = math.max(
