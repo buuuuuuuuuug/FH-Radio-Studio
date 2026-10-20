@@ -257,6 +257,9 @@ function Assert-ReleaseBundle {
   Assert-CMakeGate "FH_RADIO_STUDIO_REQUIRE_RELEASE_AUDIO_TOOLS"
 
   Assert-Exists (Join-Path $BundleDir "fh-radio-studio.exe") "Windows executable"
+  foreach ($library in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+    Assert-Exists (Join-Path $BundleDir $library) "Visual C++ runtime"
+  }
   Assert-Exists (Join-Path $BundleDir "data\flutter_assets") "Flutter assets"
   Assert-Exists (Join-Path $BundleDir "runtime\pyproject.toml") "release runtime pyproject"
   Assert-Exists (Join-Path $BundleDir "runtime\uv.lock") "release runtime lockfile"
