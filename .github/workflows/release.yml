@@ -89,6 +89,10 @@ jobs:
         working-directory: app
         run: flutter test
 
+      - name: Analyze Flutter sources
+        working-directory: app
+        run: flutter analyze --no-pub
+
   windows-release:
     name: Build Windows release artifact
     if: github.event_name != 'workflow_dispatch' || inputs.action == 'stage'

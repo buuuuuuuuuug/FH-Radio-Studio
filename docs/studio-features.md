@@ -61,3 +61,23 @@ estimate includes a separate conservative margin and cannot guarantee game
 compatibility. Actual file size limits are checked during the build. Deployment
 defaults to mediapc overlays; writing media is an explicit option with existing
 ownership and integrity checks.
+
+Audio conversion and loudness processing write directly to the first numbered
+slot WAV. Repeated slots use hard links when available, with a copy fallback.
+Each radio releases its WAV and FSB work files after its final bank passes
+validation, while radios continue building in parallel. Unchanged banks remain
+reusable from the completed package and manifest. Disk-space checks budget the
+active radios, copy fallback, completed outputs and baseline completion files.
+The explicit `--skip-bank` inspection mode retains slot WAVs.
+
+## Sample positions and RadioInfo imports
+
+Timing transfer accepts integer sample positions at a fixed 48000 Hz. CSV exports use the same columns for time and samples; choose the matching data
+form when importing. The file import dialog also accepts RadioInfo XML directly.
+Blank nodes remain incomplete; the existing overwrite, preview and backup rules apply.
+RadioInfo XML imports read only R1–R9 Event playlists and uniquely match title/artist.
+Optional XML station assignment updates only the Event draft and preserves FreeRoam.
+Other sample rates and conflicting marker definitions are reported rather than converted.
+
+See [the illustrated overview](改动说明-精简版.md) and
+[complete changes and interchange rules](改动说明-详细版.md).

@@ -203,3 +203,8 @@ GitHub Actions 也会自动发版：`main` 可以保持当前版本的 RC 号，
 See [editing, layout and timing transfer](docs/studio-features.md) for the current
 workflow and [submission review](docs/submission-review.md) for validation scope.
 Run the complete local checks with `tools/check_submission.ps1` before submitting.
+
+## 扩展版本改动说明
+
+- [新增功能概览（含应用截图）](docs/改动说明-精简版.md)
+- [相对项目源码的详细改动与使用规则](docs/改动说明-详细版.md)
