@@ -11,7 +11,7 @@ Settings exposes one **loop combination key** (Alt by default). Hold it with the
 existing beat/10ms/1ms adjustment keys to move both loop endpoints. Letter and
 function keys are supported; collisions are rejected. Releasing the held key
 stops repeat until the adjustment key is pressed again. All shortcut hints follow
-custom settings. Previous/next song wraps and defaults to Ctrl+Shift+Up/Down.
+custom settings. Previous/next song wraps and defaults to Shift+Up/Down.
 
 PL may follow TL automatically, with per-song temporary override and one-time
 synchronization. Preview defaults to one seam repetition with two seconds before

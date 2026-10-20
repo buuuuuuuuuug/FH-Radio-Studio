@@ -1,7 +1,8 @@
-# SeamlessLoopMusic experimental branch
+# LoopLab experimental engine integration
 
-This branch is based on `studio/layout-stable-20261014`. Stable sources, portable
-runtime, preferences and project remain separate from the experiment.
+LoopLab integrates the SeamlessLoopMusic native engine as an optional experimental
+feature. The source repository does not include a prepared portable runtime or
+user projects; native dependencies must be provided separately.
 
 Enable **SeamlessLoopMusic** in Overview / Basic settings. It replaces TL and PL
 loop search. Manual mode decodes the waveform and invokes only the native loop
@@ -21,9 +22,15 @@ guarantee of a musically seamless transition. Bar counts are not invented.
 
 - Upstream: https://github.com/CPUrising/seamless-loop-music
 - ABI: `loopfinder/include/loopfinder/loopfinder_api.h`, `lf_analyze_file`
-- Bundled engine: local portable 1.11.0 `loopfinder.dll`
+- Reference engine: portable 1.11.0 `loopfinder.dll` (not committed here)
 - SHA256: `c32f872e30d9c4ff17a322a1a2a2dda35c3ea488cd0bcfa10a8ebeb8ca871585`
-- MIT license accompanies the bundled library.
+- The SeamlessLoopMusic repository has an MIT license, but its native build
+  also links third-party components. In the inspected source, aubio is linked
+  statically and has a GPL-3.0 license file. The top-level MIT notice alone is
+  not a complete redistribution notice for the native binary.
+- See [source and distribution notes](third-party-notices.md). This repository
+  does not include the native DLL; verify component notices and corresponding
+  source requirements before preparing a public binary bundle.
 
 The backend converts sources to a temporary float WAV at their original sample
 rate. Returned PCM frame positions map directly to seconds; channel count does
