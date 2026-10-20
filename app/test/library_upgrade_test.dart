@@ -1,15 +1,20 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fh_radio_studio/core/app_info.dart';
+import 'package:fh_radio_studio/core/fh_radio_studio_cli.dart';
 import 'package:fh_radio_studio/core/song_browse.dart';
 import 'package:fh_radio_studio/core/studio_http_proxy.dart';
 import 'package:fh_radio_studio/core/waveform_cache.dart';
 import 'package:fh_radio_studio/domain/radio_library.dart';
 import 'package:fh_radio_studio/state/app_state.dart';
+import 'package:fh_radio_studio/state/audio_analysis_state.dart';
+import 'package:fh_radio_studio/state/custom_pool_tracks.dart';
+import 'package:fh_radio_studio/screens/replace_editor/replace_state.dart';
 import 'package:fh_radio_studio/state/editor_options.dart';
 import 'package:fh_radio_studio/state/waveform_batch_state.dart';
 import 'package:fh_radio_studio/theme/accents.dart';
@@ -39,6 +44,110 @@ final payload = <String, dynamic>{
 };
 
 void main() {
+  test('coarse waveform cache is upgraded before detailed editing', () async {
+    final f = await fixture();
+    final source = '${f.dir.path}/sources/song.wav';
+    await WaveformCache.write(f.dir.path, source, {
+      'samples': 8640000,
+      'waveform': {
+        'bins': List.filled(320, {'norm_peak': .4}),
+      },
+    });
+    expect(await WaveformCache.read(f.dir.path, source), isNotNull);
+    expect(
+      await WaveformCache.read(f.dir.path, source, minimumBins: 8192),
+      isNull,
+    );
+    await WaveformCache.write(f.dir.path, source, {
+      'samples': 8640000,
+      'waveform': {
+        'bins': List.filled(8192, {'norm_peak': .5}),
+      },
+    });
+    WaveformCache.clearMemory();
+    final detailed = await WaveformCache.read(
+      f.dir.path,
+      source,
+      minimumBins: 8192,
+    );
+    expect((detailed!['waveform'] as Map)['bins'], hasLength(8192));
+  });
+  test('short audio accepts all available waveform samples', () async {
+    final f = await fixture();
+    final source = '${f.dir.path}/sources/song.wav';
+    await WaveformCache.write(f.dir.path, source, {
+      'samples': 32,
+      'waveform': {
+        'bins': List.filled(32, {'norm_peak': .5}),
+      },
+    });
+    expect(
+      await WaveformCache.read(f.dir.path, source, minimumBins: 8192),
+      isNotNull,
+    );
+  });
+  test(
+    'AI results preserve the detailed waveform already in the editor',
+    () async {
+      final f = await fixture();
+      final c = ProviderContainer(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(
+            f.container.read(sharedPreferencesProvider),
+          ),
+          audioAnalysisCliRunnerProvider.overrideWithValue(
+            (root, args, {cancellationToken, onStdout, onStderr}) async =>
+                CliRunResult(
+                  commandLine: 'test',
+                  exitCode: 0,
+                  stderr: '',
+                  stdout: jsonEncode({
+                    'path': '${f.dir.path}/sources/song.wav',
+                    'duration_sec': 180,
+                    'sample_rate': 48000,
+                    'samples': 8640000,
+                    'bpm': 120,
+                    'waveform': {
+                      'bins': List.filled(320, {'norm_peak': .4}),
+                    },
+                  }),
+                ),
+          ),
+        ],
+      );
+      addTearDown(c.dispose);
+      c.read(editorOptionsProvider.notifier).update(manualOnly: false);
+      final editorSubscription = c.listen(
+        replaceEditorProvider('p1'),
+        (_, _) {},
+      );
+      addTearDown(editorSubscription.close);
+      final editor = c.read(replaceEditorProvider('p1').notifier);
+      final values = List.generate(8192, (i) => .1 + (i % 17) / 100);
+      editor.state = editor.state.copyWith(
+        ai: editor.state.ai.copyWith(waveformPeaks: values),
+      );
+      await editor.analyze();
+      expect(editor.state.error, isNull);
+      expect(editor.state.ai.waveformPeaks, values);
+      final source = '${f.dir.path}/sources/song.wav';
+      await WaveformCache.write(f.dir.path, source, {
+        'duration_sec': 180,
+        'sample_rate': 48000,
+        'samples': 8640000,
+        'waveform': {
+          'bins': List.generate(8192, (i) => {'norm_peak': values[i]}),
+        },
+      });
+      final realProvider = replaceEditorProvider(realTrackIdForPath(source));
+      final realSubscription = c.listen(realProvider, (_, _) {});
+      addTearDown(realSubscription.close);
+      final realEditor = c.read(realProvider.notifier);
+      await realEditor.analyze();
+      expect(realEditor.state.error, isNull);
+      expect(realEditor.state.ai.waveformPeaks, hasLength(8192));
+    },
+  );
   test(
     'saving detected beats does not downgrade a detailed waveform cache',
     () async {

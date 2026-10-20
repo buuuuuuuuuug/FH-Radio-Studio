@@ -56,9 +56,7 @@ Future<(ProviderContainer, String)> setup({
     'duration_sec': 180,
     'sample_rate': 48000,
     'waveform': {
-      'bins': [
-        {'norm_peak': .5, 'norm_rms': .4},
-      ],
+      'bins': List.filled(8192, {'norm_peak': .5, 'norm_rms': .4}),
     },
   });
   final c = ProviderContainer(

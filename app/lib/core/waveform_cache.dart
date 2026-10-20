@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:crypto/crypto.dart';
 import 'atomic_file.dart';
 
@@ -22,8 +23,9 @@ class WaveformCache {
 
   static Future<Map<String, dynamic>?> read(
     String project,
-    String source,
-  ) async {
+    String source, {
+    int minimumBins = 0,
+  }) async {
     try {
       final (file, stamp) = await _entry(project, source);
       final record =
@@ -31,7 +33,17 @@ class WaveformCache {
           jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       if (record['stamp'] != stamp || record['payload'] is! Map) return null;
       _remember(file.path, record);
-      return Map<String, dynamic>.from(record['payload'] as Map);
+      final payload = Map<String, dynamic>.from(record['payload'] as Map);
+      if (minimumBins > 0) {
+        final waveform = payload['waveform'];
+        final bins = waveform is Map ? waveform['bins'] : null;
+        final samples = (payload['samples'] as num?)?.toInt();
+        final required = samples != null && samples > 0
+            ? math.min(minimumBins, math.max(16, samples))
+            : minimumBins;
+        if (bins is! List || bins.length < required) return null;
+      }
+      return payload;
     } on Object {
       return null;
     }

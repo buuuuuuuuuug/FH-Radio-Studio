@@ -381,7 +381,7 @@ void main() {
           'duration_sec': 180,
           'sample_rate': 48000,
           'waveform': {
-            'bins': List.generate(128, (_) => {'norm_peak': .4}),
+            'bins': List.generate(8192, (_) => {'norm_peak': .4}),
           },
         }),
       );

@@ -462,6 +462,9 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     }
 
     var nextAi = _aiFromAnalysis(result);
+    if (state.ai.waveformPeaks.length > nextAi.waveformPeaks.length) {
+      nextAi = nextAi.copyWith(waveformPeaks: state.ai.waveformPeaks);
+    }
     if (state.dirty || state.saved) {
       if (ref.read(editorOptionsProvider).slmEnabled) {
         nextAi = nextAi.copyWith(
@@ -486,6 +489,10 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       zoomStart: 0,
       zoomEnd: nextAi.durationSec,
     );
+    if (pathFromRealTrackId(state.trackId) != null &&
+        state.ai.waveformPeaks.length < WaveformService.detailedBins) {
+      await loadWaveform(withLoops: false);
+    }
   }
 
   CliCancellationToken? _seamlessToken;
