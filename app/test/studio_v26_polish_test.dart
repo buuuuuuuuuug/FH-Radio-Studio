@@ -143,7 +143,23 @@ void main() {
       expect(t.takeException(), isNull);
     },
   );
-  testWidgets('Escape cannot close a transfer while an operation is pending', (
+  testWidgets('idle timing import dismisses when clicking outside', (t) async {
+    final f = await fixture.fixture();
+    await t.pumpWidget(
+      UncontrolledProviderScope(
+        container: f.container,
+        child: helpers.app(const TimingImportButton()),
+      ),
+    );
+    await t.tap(find.text('导入时间点'));
+    await t.pumpAndSettle();
+    expect(find.byType(TimingImportDialog), findsOneWidget);
+    await t.tapAt(const Offset(8, 8));
+    await t.pumpAndSettle();
+    expect(find.byType(TimingImportDialog), findsNothing);
+    expect(t.takeException(), isNull);
+  });
+  testWidgets('busy timing import rejects Escape and outside clicks', (
     t,
   ) async {
     final f = await fixture.fixture();
@@ -172,6 +188,9 @@ void main() {
     await t.tap(find.text('预览匹配'));
     await t.pump();
     await t.sendKeyEvent(LogicalKeyboardKey.escape);
+    await t.pump();
+    expect(find.byType(TimingImportDialog), findsOneWidget);
+    await t.tapAt(const Offset(8, 8));
     await t.pump();
     expect(find.byType(TimingImportDialog), findsOneWidget);
     pending.complete(

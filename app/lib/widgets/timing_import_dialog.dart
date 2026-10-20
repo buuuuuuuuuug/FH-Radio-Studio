@@ -58,7 +58,6 @@ class TimingImportButton extends ConsumerWidget {
           ? null
           : () => showDialog<void>(
               context: context,
-              barrierDismissible: false,
               builder: (_) => const TimingImportDialog(),
             ),
     );
