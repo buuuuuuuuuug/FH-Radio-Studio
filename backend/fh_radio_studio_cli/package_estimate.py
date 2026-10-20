@@ -119,12 +119,20 @@ def estimate_package(args: argparse.Namespace) -> dict:
             key = track_key_for_project_path(project, source)
             entry = entries.get(key, {})
             stat = source.stat()
-            cached = (
-                entry.get("size") == stat.st_size
-                and abs(float(entry.get("mtime_ms", -1)) - stat.st_mtime * 1000) < 2
-            )
+            try:
+                cached = (
+                    entry.get("size") == stat.st_size
+                    and abs(float(entry.get("mtime_ms", -1)) - stat.st_mtime * 1000) < 2
+                )
+            except (ValueError, TypeError):
+                cached = False
             duration = entry.get("duration_sec") if cached else None
-            if not isinstance(duration, (int, float)) or duration <= 0:
+            if (
+                isinstance(duration, bool)
+                or not isinstance(duration, (int, float))
+                or not math.isfinite(duration)
+                or duration <= 0
+            ):
                 duration = read_track_metadata(source).duration_sec
             if duration is None or not math.isfinite(duration) or duration <= 0:
                 raise CliError(f"无法读取 {source.name} 的时长，不能可靠预估大小")

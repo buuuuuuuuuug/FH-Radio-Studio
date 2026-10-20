@@ -106,6 +106,29 @@ class PackageEstimateTests(unittest.TestCase):
             before, {str(p): p.read_bytes() for p in self.project.rglob("*") if p.is_file()}
         )
 
+    def test_invalid_cached_duration_or_timestamp_falls_back_to_source_metadata(self):
+        key = track_key_for_source_ref(project_ref_for_path(self.project, self.source))
+        for duration, mtime in [
+            (float("nan"), self.source.stat().st_mtime * 1000),
+            (float("inf"), self.source.stat().st_mtime * 1000),
+            (True, self.source.stat().st_mtime * 1000),
+            (30, "invalid timestamp"),
+            (30, None),
+        ]:
+            with self.subTest(duration=duration, mtime=mtime):
+                entry = {
+                    "size": self.source.stat().st_size,
+                    "mtime_ms": mtime,
+                    "duration_sec": duration,
+                }
+                with patch(
+                    "backend.fh_radio_studio_cli.package_estimate._load_cache_entries",
+                    return_value={key: entry},
+                ):
+                    result = estimate_package(self.args)
+                rebuilt = next(row for row in result["files"] if row["rebuilt"])
+                self.assertEqual(rebuilt["duration_seconds"], 4.0)
+
     def test_expansion_adds_slots_and_quality_curve_is_monotonic(self):
         sources = [self.source]
         for i in range(5):

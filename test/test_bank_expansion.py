@@ -50,7 +50,7 @@ def fsb(count, names=False, cues=False, peak=True):
     return bytes(header) + records + table + bytes([123]) * count * 32
 
 
-def bank(names):
+def bank(names, *, cues=True):
     pairs = sorted((sound_hash(n), i) for i, n in enumerate(names))
     count = len(pairs)
     stbl = (
@@ -60,7 +60,7 @@ def bank(names):
         + b"".join(i.to_bytes(3, "little") for _, i in pairs)
         + struct.pack("<I", 4)
     )
-    payload = fsb(count, cues=True)
+    payload = fsb(count, cues=cues)
     sndh = struct.pack("<3I", 524291, 0, len(payload))
     proj = b"PROJ" + chunk(b"SNDH", sndh) + chunk(b"STBL", stbl)
     body = b"FEV " + chunk(b"LIST", proj) + chunk(b"SND ", b"\0" * 16 + payload)
@@ -100,6 +100,26 @@ class ExpansionTests(unittest.TestCase):
                 records, _ = _fsb_records(raw[raw.find(b"FSB5", sb, se) : se])
                 self.assertEqual(len(records), count)
                 self.assertTrue(all(list(c) == [4, 11, 13] for _, c in records))
+
+    def test_original_without_cues_keeps_vorbis_and_peak_metadata(self):
+        self.original.write_bytes(bank(self.old_names, cues=False))
+        names = self.old_names + ["HZ6_CUSTOM_R9_NEW"]
+        out, stats = self.build(names)
+        raw = out.read_bytes()
+        _, start, end = _find(raw, b"SND ")
+        records, audio = _fsb_records(raw[raw.find(b"FSB5", start, end) : end])
+        self.assertEqual(stats["expanded_slots"], 1)
+        self.assertTrue(all(list(chunks) == [11, 13] for _, chunks in records))
+        self.assertEqual(audio, bytes([123]) * len(names) * 32)
+
+    def test_original_without_cues_still_requires_peak_metadata(self):
+        self.original.write_bytes(bank(self.old_names, cues=False))
+        output = self.root / "invalid.bank"
+        with self.assertRaisesRegex(CliError, "peak-volume"):
+            rebuild_expanded_bank(
+                self.original, fsb(3, peak=False), self.old_names + ["extra"], 2, output
+            )
+        self.assertFalse(output.exists())
 
     def test_reordered_audio_indices(self):
         names = ["HZ6_CUSTOM_R9_NEW", *reversed(self.old_names)]

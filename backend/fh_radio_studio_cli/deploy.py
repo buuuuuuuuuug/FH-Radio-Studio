@@ -5,18 +5,18 @@ import tempfile
 from .baseline import baseline_version_id, describe_game_version, load_baseline_md5s
 from .common import *
 from .deployment_paths import contained_game_path, deployment_relative_path
-from .game import resolve_game_dir, steam_game_version
+from .file_transaction import game_file_write_lock, replace_files_atomically
+from .game import game_root_for, resolve_game_dir, steam_game_version
 from .language import (
     normalize_preferred_language,
     resolve_user_preferred_lang_path,
-    write_user_preferred_lang,
 )
 from .package import collect_package_deploy_files
 from .project_json_guard import write_project_json
 from .project_refs import project_path_or_absolute
 
 
-def _write_last_applied_manifest(
+def _last_applied_manifest_data(
     path: Optional[str],
     *,
     package_manifest_path: Path,
@@ -24,9 +24,9 @@ def _write_last_applied_manifest(
     package_manifest: Dict[str, object],
     game_version: Dict[str, object],
     deploy_files: List[Dict[str, object]],
-) -> None:
+) -> Dict[str, object]:
     if not path:
-        return
+        return {}
     manifest_path = Path(path).expanduser()
     project_dir = (
         manifest_path.parent.parent if manifest_path.parent.name == ".fh-radio-studio" else None
@@ -73,7 +73,7 @@ def _write_last_applied_manifest(
             else "media"
         ),
     }
-    write_project_json(manifest_path, manifest, project_dir=project_dir)
+    return manifest
 
 
 def _last_applied_md5s(path: Optional[str]) -> Dict[str, str]:
@@ -111,7 +111,12 @@ def _last_applied_md5s(path: Optional[str]) -> Dict[str, str]:
 
 
 def cmd_deploy_package(args: argparse.Namespace) -> int:
-    game_dir = resolve_game_dir(args.game_dir)
+    game_dir = game_root_for(resolve_game_dir(args.game_dir))
+    with game_file_write_lock(game_dir, enabled=args.yes):
+        return _deploy_package(args, game_dir)
+
+
+def _deploy_package(args: argparse.Namespace, game_dir: Path) -> int:
     game_version = steam_game_version(game_dir)
     package_dir = Path(args.package_dir).expanduser()
     package_root = package_root_dir(package_dir)
@@ -215,40 +220,43 @@ def cmd_deploy_package(args: argparse.Namespace) -> int:
         print("\nDry run only. Re-run with --yes to write files.")
         return 0
 
+    language = package_manifest.get("language") if isinstance(package_manifest, dict) else None
+    fingerprint_path = getattr(args, "last_applied_manifest", None)
+    with tempfile.TemporaryDirectory(prefix="fh-radio-studio-deploy-") as temporary_dir:
+        staging = Path(temporary_dir)
+        replacements = [
+            (Path(str(item["source"])), Path(str(item["destination"])), item["package_md5"])
+            for item in manifest_files
+        ]
+        if isinstance(language, dict) and language.get("preferred_lang"):
+            preferred_lang = normalize_preferred_language(str(language["preferred_lang"]))
+            preferred_path = resolve_user_preferred_lang_path(getattr(args, "preferred_path", None))
+            staged_language = staging / "UserPreferredLang"
+            staged_language.write_text(preferred_lang, encoding="utf-8")
+            replacements.append((staged_language, preferred_path, None))
+        if fingerprint_path:
+            fingerprint = Path(fingerprint_path).expanduser()
+            staged_manifest = staging / "last_applied_package_manifest.json"
+            manifest = _last_applied_manifest_data(
+                fingerprint_path,
+                package_manifest_path=package_manifest_path,
+                package_root=package_root,
+                package_manifest=package_manifest,
+                game_version=game_version,
+                deploy_files=manifest_files,
+            )
+            project_dir = (
+                fingerprint.parent.parent if fingerprint.parent.name == ".fh-radio-studio" else None
+            )
+            write_project_json(staged_manifest, manifest, project_dir=project_dir)
+            replacements.append((staged_manifest, fingerprint, None))
+        replace_files_atomically(replacements, removals=owned_overlay_removals)
     for item in manifest_files:
-        src = Path(str(item["source"]))
-        dest = Path(str(item["destination"]))
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            dir=dest.parent, prefix=f".{dest.name}.", suffix=".deploy-tmp", delete=False
-        ) as handle:
-            temp = Path(handle.name)
-        try:
-            shutil.copy2(src, temp)
-            temp.replace(dest)
-        finally:
-            if temp.exists():
-                temp.unlink()
         print(f"  copied {item['install_relative_path']}")
     for overlay in owned_overlay_removals:
-        overlay.unlink()
         print(f"  removed owned override {overlay.relative_to(game_dir)}")
-
-    language = package_manifest.get("language") if isinstance(package_manifest, dict) else None
     if isinstance(language, dict) and language.get("preferred_lang"):
-        preferred_lang = normalize_preferred_language(str(language["preferred_lang"]))
-        preferred_path = resolve_user_preferred_lang_path(getattr(args, "preferred_path", None))
-        write_user_preferred_lang(preferred_path, preferred_lang)
         print(f"  wrote UserPreferredLang -> {preferred_lang}")
-
-    _write_last_applied_manifest(
-        getattr(args, "last_applied_manifest", None),
-        package_manifest_path=package_manifest_path,
-        package_root=package_root,
-        package_manifest=package_manifest,
-        game_version=game_version,
-        deploy_files=manifest_files,
-    )
     if getattr(args, "last_applied_manifest", None):
         print(f"Last applied fingerprint: {Path(args.last_applied_manifest).expanduser()}")
     return 0

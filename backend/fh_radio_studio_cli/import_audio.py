@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .audio import linear_resample
 from .common import *
+from .file_lock import FileLockTimeout, exclusive_file_lock
 from .loudness import LOUDNESS_ALGORITHM_VERSION, analyze_loudness_file
 from .metadata import (
     AUDIO_SUFFIXES,
@@ -11,19 +12,34 @@ from .metadata import (
     write_import_completion_marker,
     write_track_metadata_tags,
 )
+from .project_json_guard import write_project_json
 
 LOSSLESS_PROJECT_EXTENSIONS = {".wav", ".flac", ".aif", ".aiff"}
 
 
 def cmd_import_audio(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir).expanduser().resolve()
+    if args.target_folder not in {"sources", "siren"}:
+        die(f"Unsupported import folder: {args.target_folder}")
     source_dir = project_dir / args.target_folder
+    if project_dir not in source_dir.resolve().parents:
+        die(f"Import folder escapes project directory: {source_dir}")
     source_dir.mkdir(parents=True, exist_ok=True)
 
     files = collect_import_audio_files(Path(value) for value in args.inputs)
     if not files:
         die("No importable audio files found")
 
+    try:
+        with exclusive_file_lock(project_dir / ".fh-radio-studio" / "import_audio.lock"):
+            return _import_audio_files(args, project_dir, source_dir, files)
+    except FileLockTimeout as error:
+        raise CliError(
+            "Audio import is already running for this project; wait for it to finish."
+        ) from error
+
+
+def _import_audio_files(args, project_dir, source_dir, files):
     cache_path = metadata_cache_path(project_dir)
     imported = []
     duplicates = []
@@ -94,10 +110,7 @@ def cmd_import_audio(args: argparse.Namespace) -> int:
             "mtime_ns": stat.st_mtime_ns,
         }
         by_size.setdefault(dst.stat().st_size, []).append(dst)
-    dedup_path.parent.mkdir(parents=True, exist_ok=True)
-    dedup_temp = dedup_path.with_suffix(".tmp")
-    dedup_temp.write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
-    dedup_temp.replace(dedup_path)
+    write_project_json(dedup_path, known, project_dir=project_dir)
     summary = {
         "schema_version": 1,
         "project_dir": str(project_dir),
@@ -417,7 +430,14 @@ def _audio_info(path: Path) -> object:
 
 
 def _temp_output_path(dst: Path) -> Path:
-    return dst.with_name(f".{dst.stem}.fh-radio-studio-import-tmp{dst.suffix}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=dst.parent,
+        prefix=f".{dst.stem}.fh-radio-studio-import-tmp-",
+        suffix=dst.suffix,
+        delete=False,
+    ) as handle:
+        return Path(handle.name)
 
 
 def _unique_destination(directory: Path, basename: str) -> Path:

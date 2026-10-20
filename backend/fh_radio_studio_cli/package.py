@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import mmap
 import multiprocessing as mp
 import os
@@ -7,6 +8,7 @@ import queue
 import threading
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, as_completed, wait
 from contextlib import contextmanager
+from functools import wraps
 from time import perf_counter
 from typing import Any, Iterable, Iterator
 
@@ -19,8 +21,19 @@ from .audio import (
     timing_override_for,
 )
 from .bank_expansion import expanded_sound_name, rebuild_expanded_bank
+from .bank_reuse import (
+    atomic_package_build,
+    engine_signature,
+    file_sha256,
+    load_previous_units,
+    published_path,
+    radio_fingerprint,
+    reusable_bank,
+    stamp_unit,
+)
 from .baseline_order import is_baseline_derived_index_path, load_baseline_bank_order_names
 from .common import *
+from .deployment_paths import contained_game_path
 from .external_tools import find_executable
 from .fsb5 import (
     bank_name_from_path,
@@ -57,9 +70,11 @@ from .metadata import (
     infer_metadata_cache_path_from_timing_manifest,
     load_track_asset_index,
     metadata_cache_path,
+    read_track_metadata,
     resolve_track_key,
     upsert_track_metadata_cache_entry,
 )
+from .package_workspace import cleanup_audio_workspace, finish_radio_audio, stage_wav
 from .project_json_guard import write_project_json
 from .project_refs import project_path_or_absolute, track_key_for_project_path
 from .radio_xml import patch_package_xml_tree
@@ -386,6 +401,7 @@ def _track_key_for_package_source(args: argparse.Namespace, source: Path) -> Opt
 
 
 def _project_path_for_manifest(args: argparse.Namespace, path: Path) -> str:
+    path = published_path(args, path)
     project_dir = _project_dir_for_args(args)
     if project_dir is None:
         return str(path.resolve())
@@ -588,10 +604,10 @@ def _package_unit_for_manifest(unit: Dict[str, object]) -> Dict[str, object]:
 
 
 def _baseline_install_relative_path(item: Dict[str, object]) -> str:
-    install_rel = str(item.get("install_relative_path") or "").replace("\\", "/").strip("/")
+    install_rel = str(item.get("install_relative_path") or "").replace("\\", "/")
     if install_rel:
         return install_rel
-    rel = str(item.get("relative_path") or "").replace("\\", "/").strip("/")
+    rel = str(item.get("relative_path") or "").replace("\\", "/")
     if not rel:
         return ""
     if rel.startswith("media/") or rel == "UserPreferredLang":
@@ -627,7 +643,7 @@ def complete_package_from_baseline(
         if not install_rel or install_rel == "UserPreferredLang":
             continue
         files += 1
-        dest = package_root / Path(*install_rel.split("/"))
+        dest = contained_game_path(package_root, install_rel)
         if dest.exists():
             kept += 1
             continue
@@ -1541,6 +1557,7 @@ def prepare_music_tracks(
     loudness_envelope: Optional[Dict[str, object]] = None,
     parallel_loudness: bool = True,
     precomputed_loudness_by_source: Optional[Dict[str, Dict[str, object]]] = None,
+    slot_filename_width: Optional[int] = None,
 ) -> List[Dict[str, object]]:
     prepared_dir.mkdir(parents=True, exist_ok=True)
     envelope = loudness_envelope or ensure_baseline_loudness_envelope(
@@ -1603,9 +1620,10 @@ def prepare_music_tracks(
     prepared_tracks: List[Dict[str, object]] = []
     for index, music in enumerate(music_files, start=1):
         artist, title = guess_metadata(music)
-        prepared_wav = (
-            prepared_dir
-            / f"{index:02d}_{sanitize_token(artist, 'Artist')}_{sanitize_token(title, 'Track')}.wav"
+        prepared_wav = prepared_dir / (
+            f"{index:0{slot_filename_width}d}.wav"
+            if slot_filename_width is not None
+            else f"{index:02d}_{sanitize_token(artist, 'Artist')}_{sanitize_token(title, 'Track')}.wav"
         )
         before, after, loudness = prepare_loudness_matched_audio(
             music,
@@ -1725,6 +1743,13 @@ def build_radio_package_unit(
     print(f"Bank slots  : {bank_info.num_samples}")
     print(f"Music files : {len(music_files)}")
 
+    bank_name = bank_name_from_path(target_bank)
+    stage_dir = stage_root / bank_name
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True)
+    width = max(4, len(str(len(target_names))))
+
     with progress.stage(
         _radio_progress_step_id(radio, "prepare_audio"),
         summary=f"{len(music_files)} 首音频已准备",
@@ -1732,13 +1757,14 @@ def build_radio_package_unit(
         prepared_tracks = prepare_music_tracks(
             music_files,
             args,
-            prepared_dir / f"R{radio}",
+            stage_dir,
             timing_overrides,
             ffmpeg,
             radio=radio,
             loudness_envelope=loudness_envelope,
             parallel_loudness=precomputed_loudness_by_source is None,
             precomputed_loudness_by_source=precomputed_loudness_by_source,
+            slot_filename_width=width,
         )
 
     if expanding:
@@ -1752,16 +1778,9 @@ def build_radio_package_unit(
                 if int(markers.get(key, -1)) < 0:
                     markers[key] = max(0, int(track["sample_length"]) - int(track["sample_rate"]))
 
-    bank_name = bank_name_from_path(target_bank)
-    stage_dir = stage_root / bank_name
-    if stage_dir.exists():
-        shutil.rmtree(stage_dir)
-    stage_dir.mkdir(parents=True)
-
     playlist_types_by_source = playlist_types_by_source or {}
     playlist_slots_by_source = playlist_slots_by_source or {}
     assignments: List[Dict[str, object]] = []
-    width = max(4, len(str(bank_info.num_samples)))
     with progress.stage(
         _radio_progress_step_id(radio, "stage_bank"),
         summary=f"{len(target_names)} 个 bank 槽位已 staged",
@@ -1771,7 +1790,7 @@ def build_radio_package_unit(
             track = prepared_tracks[source_index]
             staged_wav = stage_dir / f"{slot_index + 1:0{width}d}.wav"
             runtime_source = Path(str(track.get("_runtime_source") or track.get("source")))
-            shutil.copy2(track["_runtime_prepared_wav"], staged_wav)
+            stage_wav(track["_runtime_prepared_wav"], staged_wav)
             playlist_types = playlist_types_by_source.get(
                 source_key(runtime_source),
                 list(PLAYLIST_TYPES),
@@ -1840,7 +1859,7 @@ def build_radio_package_unit(
             else:
                 new_fsb = rewrite_fsb5_names(fsb_path.read_bytes(), ordered_names)
                 splice_stats = splice_fsb5_into_bank(target_bank, new_fsb, rebuilt_bank)
-            print(f"Rebuilt bank: {rebuilt_bank}")
+            print(f"Rebuilt bank: {published_path(args, rebuilt_bank)}")
     else:
         progress.completed(
             _radio_progress_step_id(radio, "rebuild_bank"),
@@ -1848,6 +1867,7 @@ def build_radio_package_unit(
             summary="--skip-bank",
         )
 
+    finish_radio_audio(args, stage_dir, fsbank_out, rebuilt_bank, len(target_names))
     return {
         "radio": radio,
         "station": station.get("Name"),
@@ -2161,7 +2181,7 @@ def cmd_build_current_radio_package(
         ]
         write_text(package_root / "INSTALL_README.txt", "\n".join(instructions) + "\n")
 
-    print(f"Package manifest: {manifest_path}")
+    print(f"Package manifest: {published_path(args, manifest_path)}")
     print(f"Baseline-radio package built with {len(copied_radio_info)} RadioInfo file(s).")
     return 0
 
@@ -2342,7 +2362,7 @@ def cmd_build_baseline_restore_package(
         ]
         write_text(package_root / "INSTALL_README.txt", "\n".join(instructions) + "\n")
 
-    print(f"Package manifest: {manifest_path}")
+    print(f"Package manifest: {published_path(args, manifest_path)}")
     print(f"Builtin restore package built with {len(restored_units)} restored radio(s).")
     return 0
 
@@ -2364,6 +2384,8 @@ def _build_radio_package_units_from_plan(
     precomputed_loudness_by_source: Dict[str, Dict[str, object]],
     progress: _PackageProgressReporter,
 ) -> List[Dict[str, object]]:
+    if not groups:
+        return []
     worker_count = _radio_package_worker_count(len(groups))
     if worker_count <= 1:
         return [
@@ -2378,7 +2400,7 @@ def _build_radio_package_units_from_plan(
                 group.get("playlist_slots_by_source"),
                 prepared_dir,
                 stage_root,
-                fsbank_out,
+                fsbank_out / f"R{int(group['radio'])}",
                 package_bank_dir,
                 ffmpeg,
                 fsbankcl,
@@ -2449,6 +2471,152 @@ def _build_radio_package_units_from_plan(
     return [item for item in results if item is not None]
 
 
+def _plan_radio_bank_reuse(
+    args, audio_dir, root, groups, timing_overrides, envelope, ffmpeg, fsbankcl
+):
+    if args.skip_bank:
+        return {}, {}
+    engine = engine_signature(ffmpeg, fsbankcl)
+    previous = load_previous_units(getattr(args, "reuse_package", None))
+    print(f"正在比较 {len(groups)} 个电台的音频、时间点与构建设置。")
+    if previous and not any(isinstance(unit.get("bank_build"), dict) for _, unit in previous):
+        print("旧准备包尚无可验证的复用记录，本次正常构建；后续构建将自动复用未变化的电台。")
+    fingerprints, reused = {}, {}
+    project = _project_dir_for_args(args)
+    for group in groups:
+        radio = int(group["radio"])
+        station = find_station(root, radio)
+        bank = resolve_target_bank_for_station(audio_dir, station, radio, args.bank)
+        info = parse_fsb5(bank)
+        names = target_names_for_bank(station, info, bank, args.baseline_manifest)
+        tracks = []
+        for source in group["sources"]:
+            override = timing_override_for(timing_overrides, source, project_dir=project)
+            identity = (
+                track_key_for_project_path(project, source) if project else str(source.resolve())
+            )
+            tracks.append(
+                {
+                    "identity": identity,
+                    "sha256": file_sha256(source),
+                    "metadata": guess_metadata(source),
+                    "bpm": bpm_from_override(override, args.bpm),
+                    "markers": {
+                        name: marker_seconds_from_override(override, name)
+                        for name in CORE_TIMING_MARKERS
+                    },
+                }
+            )
+        fingerprint = radio_fingerprint(
+            radio=radio,
+            source_bank=bank,
+            target_names=names,
+            tracks=tracks,
+            engine=engine,
+            settings={
+                "quality": args.quality,
+                "expand_slots": bool(getattr(args, "expand_slots", False)),
+                "loudness_offset_lu": _args_loudness_offset_lu(args),
+                "loudness_envelope": {
+                    key: envelope.get(key)
+                    for key in (
+                        "safe_min_lufs",
+                        "safe_max_lufs",
+                        "reference_median_lufs",
+                        "true_peak_ceiling_dbtp",
+                        "max_positive_gain_db",
+                    )
+                },
+                "station": ET.tostring(station, encoding="unicode"),
+                "playlist_types": group.get("playlist_types_by_source"),
+                "playlist_slots": group.get("playlist_slots_by_source"),
+            },
+        )
+        fingerprints[radio] = fingerprint
+        candidate = reusable_bank(
+            previous, radio=radio, bank_name=bank.name, fingerprint=fingerprint
+        )
+        if candidate is not None:
+            reused[radio] = candidate
+    return fingerprints, reused
+
+
+def _require_package_workspace_space(
+    args, audio_dir, root, groups, *, reused_bytes=0, reused_bank_names=()
+):
+    """Budget active radios, including the worst-case copy fallback for repeated slots."""
+    from .package_estimate import nominal_stereo_bps
+
+    durations = {}
+    staged_seconds_by_radio = []
+    output_banks = set(reused_bank_names)
+    for group in groups:
+        values = []
+        for source in group["sources"]:
+            if source not in durations:
+                duration = read_track_metadata(source).duration_sec
+                if duration is None or not math.isfinite(duration) or duration <= 0:
+                    raise CliError(f"无法读取音频时长：{source.name}")
+                durations[source] = float(duration)
+            values.append(durations[source])
+        if not values:
+            continue
+        station = find_station(root, int(group["radio"]))
+        bank = resolve_target_bank_for_station(audio_dir, station, int(group["radio"]), args.bank)
+        output_banks.add(bank.name)
+        with (
+            bank.open("rb") as stream,
+            mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as raw,
+        ):
+            count = parse_fsb5_bytes(raw).num_samples
+        slots = max(count, len(values)) if getattr(args, "expand_slots", False) else count
+        staged_seconds_by_radio.append(sum(values[i % len(values)] for i in range(slots)))
+    staged_seconds = sum(staged_seconds_by_radio)
+    active_count = _radio_package_worker_count(len(staged_seconds_by_radio))
+    active_seconds = sum(sorted(staged_seconds_by_radio, reverse=True)[:active_count])
+    if getattr(args, "skip_bank", False):
+        pcm = staged_seconds * 48000 * 2 * 2
+        encoded = 0
+    else:
+        pcm = active_seconds * 48000 * 2 * 2
+        encoded = (staged_seconds + active_seconds) * nominal_stereo_bps(args.quality) / 8 * 1.35
+    completion_bytes = 0
+    baseline = getattr(args, "baseline_manifest", None)
+    if baseline:
+        for item in load_manifest(Path(baseline)).get("files", []):
+            relative = _baseline_install_relative_path(item)
+            if relative and Path(relative).name not in output_banks:
+                completion_bytes += max(0, int(item.get("size") or 0))
+    required = int(pcm + encoded + reused_bytes + completion_bytes + 256 * 1024**2)
+    location = Path(args.out_dir).expanduser().resolve()
+    while not location.exists():
+        location = location.parent
+    free = shutil.disk_usage(location).free
+    if free < required:
+        raise CliError(
+            f"构建准备包的磁盘空间不足：预计需要 {required / 1024**3:.2f} GiB 临时空间，"
+            f"当前可用 {free / 1024**3:.2f} GiB。请清理工作区所在磁盘后重试。"
+        )
+
+
+def _cleanup_package_audio_after_build(function):
+    @wraps(function)
+    def run(args, *positional, **keywords):
+        try:
+            return function(args, *positional, **keywords)
+        finally:
+            # --skip-bank intentionally leaves WAVs for inspection/debugging.
+            if not getattr(args, "skip_bank", False):
+                work = Path(args.out_dir).expanduser() / "work"
+                cleanup_audio_workspace(
+                    args.out_dir,
+                    *(work / name for name in ("prepared", "fsbank_stage", "fsbank_out")),
+                )
+
+    return run
+
+
+@_cleanup_package_audio_after_build
 def cmd_build_package_from_plan(
     args: argparse.Namespace,
     game_dir: Path,
@@ -2524,6 +2692,38 @@ def cmd_build_package_from_plan(
     print(f"Out dir     : {out_dir}")
 
     loudness_envelope = _ensure_package_loudness_envelope(args, progress)
+    fingerprints, reused = _plan_radio_bank_reuse(
+        args,
+        audio_dir,
+        root,
+        groups,
+        timing_overrides,
+        loudness_envelope,
+        ffmpeg,
+        fsbankcl,
+    )
+    changed_groups = [group for group in groups if int(group["radio"]) not in reused]
+    _require_package_workspace_space(
+        args,
+        audio_dir,
+        root,
+        changed_groups,
+        reused_bytes=sum(item.source.stat().st_size for item in reused.values()),
+        reused_bank_names={item.source.name for item in reused.values()},
+    )
+    reused_units = []
+    for radio, candidate in reused.items():
+        reused_units.append(candidate.copy_to(package_bank_dir))
+        print(f"R{radio}：内容与构建设置未变化，复用已构建 bank，跳过音频处理和编码。")
+        for step in ("prepare_audio", "stage_bank", "rebuild_bank"):
+            progress.completed(
+                _radio_progress_step_id(radio, step), status="skipped", summary="复用已构建 bank"
+            )
+    song_loudness_sources = _unique_music_sources(changed_groups)
+    if not song_loudness_sources:
+        progress.completed(
+            "song_loudness_cache", status="skipped", summary="所有电台均复用已有 bank"
+        )
     precomputed_loudness_by_source = _build_package_song_loudness_cache(
         song_loudness_sources,
         args,
@@ -2535,7 +2735,7 @@ def cmd_build_package_from_plan(
         game_dir,
         audio_dir,
         root,
-        groups,
+        changed_groups,
         prepared_dir,
         stage_root,
         fsbank_out,
@@ -2546,6 +2746,15 @@ def cmd_build_package_from_plan(
         loudness_envelope,
         precomputed_loudness_by_source,
         progress,
+    )
+    if not args.skip_bank:
+        for unit in radio_packages:
+            stamp_unit(
+                unit, fingerprints[int(unit["radio"])], package_bank_dir / unit["target_bank_name"]
+            )
+    radio_packages = sorted(radio_packages + reused_units, key=lambda unit: int(unit["radio"]))
+    print(
+        f"Bank 构建完成：复用 {len(reused_units)} 个，重构 {len(radio_packages) - len(reused_units)} 个。"
     )
 
     if args.source or args.target:
@@ -2581,6 +2790,10 @@ def cmd_build_package_from_plan(
             "Generated bank has only been tool-validated. Do not deploy unless "
             "you intentionally accept the risk or have verified this package in game."
         ),
+        "bank_reuse": {
+            "reused_radios": sorted(reused),
+            "rebuilt_radios": [int(group["radio"]) for group in changed_groups],
+        },
         "radios": [_package_unit_for_manifest(item) for item in radio_packages],
     }
     if restore_targets:
@@ -2645,13 +2858,15 @@ def cmd_build_package_from_plan(
             )
         write_text(out_dir / "package" / "INSTALL_README.txt", "\n".join(instructions) + "\n")
 
-    print(f"Package manifest: {manifest_path}")
+    print(f"Package manifest: {published_path(args, manifest_path)}")
     print(f"XML totals      : {totals}")
     if args.skip_bank:
         print("Bank rebuild skipped.")
     return 0
 
 
+@atomic_package_build
+@_cleanup_package_audio_after_build
 def cmd_build_package(args: argparse.Namespace) -> int:
     if not 1 <= args.quality <= 100:
         die("Build quality must be between 1 and 100")
@@ -2745,7 +2960,6 @@ def cmd_build_package(args: argparse.Namespace) -> int:
     station = find_station(root, args.radio)
     target_bank = resolve_target_bank_for_station(audio_dir, station, args.radio, args.bank)
     bank_info = parse_fsb5(target_bank)
-    target_names = target_names_for_bank(station, bank_info, target_bank, args.baseline_manifest)
     playlist_cap = playlist_entry_cap_for_types(
         station,
         PLAYLIST_TYPES,
@@ -2809,104 +3023,25 @@ def cmd_build_package(args: argparse.Namespace) -> int:
     print(f"Out dir     : {out_dir}")
 
     loudness_envelope = _ensure_package_loudness_envelope(args, progress)
-    prepared_tracks: List[Dict[str, object]] = []
-    with progress.stage(
-        _radio_progress_step_id(args.radio, "prepare_audio"),
-        summary=f"{len(music_files)} 首音频已准备",
-    ):
-        prepared_tracks = prepare_music_tracks(
-            music_files,
-            args,
-            prepared_dir,
-            timing_overrides,
-            ffmpeg,
-            radio=args.radio,
-            loudness_envelope=loudness_envelope,
-        )
-
-    bank_name = bank_name_from_path(target_bank)
-    stage_dir = stage_root / bank_name
-    if stage_dir.exists():
-        shutil.rmtree(stage_dir)
-    stage_dir.mkdir(parents=True)
-
-    assignments: List[Dict[str, object]] = []
-    width = max(4, len(str(bank_info.num_samples)))
-    with progress.stage(
-        _radio_progress_step_id(args.radio, "stage_bank"),
-        summary=f"{len(target_names)} 个 bank 槽位已 staged",
-    ):
-        for slot_index, target_sound_name in enumerate(target_names):
-            source_index = slot_index % len(prepared_tracks)
-            track = prepared_tracks[source_index]
-            staged_wav = stage_dir / f"{slot_index + 1:0{width}d}.wav"
-            shutil.copy2(track["_runtime_prepared_wav"], staged_wav)
-            assignments.append(
-                {
-                    "slot_index": slot_index,
-                    "target_sound_name": target_sound_name,
-                    "staged_wav": _project_path_for_manifest(args, staged_wav),
-                    "source_index": source_index,
-                    **(
-                        {"track_key": track["track_key"]}
-                        if isinstance(track.get("track_key"), str)
-                        else {"source": track["source"]}
-                    ),
-                    "playlist_entry": slot_index < len(prepared_tracks),
-                    "playlist_types": list(PLAYLIST_TYPES),
-                    "playlist_slots": {
-                        playlist_type: slot_index + 1 for playlist_type in PLAYLIST_TYPES
-                    },
-                    "display_name": track["display_name"],
-                    "artist": track["artist"],
-                    "sample_rate": track["sample_rate"],
-                    "sample_length": track["sample_length"],
-                    "markers": track["markers"],
-                    "bpm": track["bpm"],
-                }
-            )
-
-    rebuilt_bank = package_bank_dir / target_bank.name
-    splice_stats: Optional[Dict[str, int]] = None
-    pack_order: Optional[List[int]] = None
-    if not args.skip_bank:
-        with progress.stage(
-            _radio_progress_step_id(args.radio, "rebuild_bank"),
-            summary=target_bank.name,
-        ):
-            fsb_path = run_fsbankcl(fsbankcl, stage_dir, fsbank_out, args.quality)
-            pack_order = detect_pack_order(fsb_path, bank_info.num_samples)
-            if pack_order:
-                print(
-                    f"fsbank pack order detected: {pack_order[:16]}{' ...' if len(pack_order) > 16 else ''}"
-                )
-                ordered_names = [target_names[i] for i in pack_order]
-            else:
-                print("Could not detect fsbank pack order; assuming numeric stage order.")
-                ordered_names = target_names
-            new_fsb = rewrite_fsb5_names(fsb_path.read_bytes(), ordered_names)
-            splice_stats = splice_fsb5_into_bank(target_bank, new_fsb, rebuilt_bank)
-            print(f"Rebuilt bank: {rebuilt_bank}")
-    else:
-        progress.completed(
-            _radio_progress_step_id(args.radio, "rebuild_bank"),
-            status="skipped",
-            summary="--skip-bank",
-        )
-
-    radio_package = {
-        "radio": args.radio,
-        "station": station.get("Name"),
-        "source_bank": _project_path_for_manifest(args, target_bank),
-        "target_bank_name": target_bank.name,
-        "bank_slots": bank_info.num_samples,
-        "replaceable_slots": replaceable_slots,
-        "pack_order": pack_order,
-        "splice": splice_stats,
-        "loudness_profile": prepared_tracks[0].get("loudness_profile") if prepared_tracks else None,
-        "music": prepared_tracks,
-        "assignments": assignments,
-    }
+    radio_package = build_radio_package_unit(
+        args,
+        game_dir,
+        audio_dir,
+        root,
+        args.radio,
+        music_files,
+        None,
+        None,
+        prepared_dir,
+        stage_root,
+        fsbank_out / f"R{args.radio}",
+        package_bank_dir,
+        ffmpeg,
+        fsbankcl,
+        timing_overrides,
+        loudness_envelope,
+        progress,
+    )
     package_manifest = {
         "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -3021,7 +3156,7 @@ def cmd_build_package(args: argparse.Namespace) -> int:
             )
         write_text(out_dir / "package" / "INSTALL_README.txt", "\n".join(instructions) + "\n")
 
-    print(f"Package manifest: {manifest_path}")
+    print(f"Package manifest: {published_path(args, manifest_path)}")
     print(f"XML totals      : {totals}")
     if args.skip_bank:
         print("Bank rebuild skipped.")

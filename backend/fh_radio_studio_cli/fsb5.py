@@ -47,9 +47,13 @@ def parse_fsb5_bytes(raw: bytes) -> FSB5Info:
     samples: List[FSB5Sample] = []
     sample_headers_offset = offset + FSB5_HEADER_SIZE
     name_table_offset = sample_headers_offset + sh_size
+    if sh_size < num_samples * 8:
+        die("FSB5 sample headers are truncated")
     cursor = sample_headers_offset
 
     for index in range(num_samples):
+        if cursor + 8 > name_table_offset:
+            die("FSB5 sample header exceeds its section")
         lo, hi = struct.unpack_from("<II", raw, cursor)
         meta = lo | (hi << 32)
         has_extra = meta & 0x1
@@ -63,10 +67,14 @@ def parse_fsb5_bytes(raw: bytes) -> FSB5Info:
         cursor += 8
         if has_extra:
             while True:
+                if cursor + 4 > name_table_offset:
+                    die("FSB5 extra metadata header is truncated")
                 extra = struct.unpack_from("<I", raw, cursor)[0]
                 cursor += 4
                 more = extra & 0x1
                 size = (extra >> 1) & 0xFFFFFF
+                if size > name_table_offset - cursor:
+                    die("FSB5 extra metadata exceeds sample headers")
                 cursor += size
                 if not more:
                     break
@@ -81,16 +89,23 @@ def parse_fsb5_bytes(raw: bytes) -> FSB5Info:
         )
 
     if nt_size > 0:
+        if nt_size < num_samples * 4:
+            die("FSB5 name offsets are truncated")
         name_table = raw[name_table_offset : name_table_offset + nt_size]
         offsets = [
             struct.unpack_from("<I", name_table, 4 * index)[0] for index in range(num_samples)
         ]
         named_samples: List[FSB5Sample] = []
         for sample, name_offset in zip(samples, offsets):
+            if not num_samples * 4 <= name_offset < nt_size:
+                die("FSB5 name offset is outside its string table")
             end = name_table.find(b"\x00", name_offset)
             if end < 0:
-                end = len(name_table)
-            name = name_table[name_offset:end].decode("utf-8", "replace")
+                die("FSB5 sample name is not terminated")
+            try:
+                name = name_table[name_offset:end].decode("utf-8")
+            except UnicodeDecodeError:
+                die("FSB5 sample name is not valid UTF-8")
             named_samples.append(
                 FSB5Sample(
                     index=sample.index,
@@ -122,6 +137,7 @@ def extract_embedded_fsb(bank: Path, out_fsb: Path) -> FSB5Info:
 def rewrite_fsb5_names(fsb5: bytes, new_names: List[str]) -> bytes:
     if not fsb5.startswith(b"FSB5"):
         die("fsbank output is not an FSB5 file")
+    parse_fsb5_bytes(fsb5)
     magic, version, num_samples, sh_size, old_nt_size, sd_size, codec, flags = struct.unpack_from(
         "<4s7I", fsb5, 0
     )

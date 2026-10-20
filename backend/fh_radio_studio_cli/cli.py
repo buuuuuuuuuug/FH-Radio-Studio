@@ -293,6 +293,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconstruct_plan.set_defaults(func=cmd_reconstruct_plan)
 
+    from .playlist_membership import cmd_playlist_membership
+
+    membership = sub.add_parser(
+        "playlist-membership",
+        help="Resolve all current RadioInfo playlist memberships to project sources",
+    )
+    membership.add_argument("--project-dir", required=True)
+    membership.add_argument("--radio-info", required=True)
+    membership.set_defaults(func=cmd_playlist_membership)
+
     check_ai = sub.add_parser(
         "check-ai-tools", help="Check local AI timepoint provider/runtime readiness"
     )
@@ -339,7 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
     timing_import.add_argument("--project-dir", required=True)
     timing_import.add_argument("--input", default="-")
     timing_import.add_argument(
-        "--format", default="auto", choices=["auto", "json", "csv", "tsv", "txt", "text", "xlsx"]
+        "--format",
+        default="auto",
+        choices=["auto", "json", "csv", "tsv", "txt", "text", "xlsx", "xml"],
     )
     timing_import.add_argument("--overwrite", action="store_true")
     timing_import.add_argument("--confirm", action="store_true")
@@ -352,6 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "filename", "title", "title-artist", "artist-title"],
     )
     timing_import.add_argument("--assign-radio", action="store_true")
+    timing_import.add_argument("--time-unit", choices=["time", "samples"], default="time")
+    timing_import.add_argument("--sample-rate", type=int, choices=[48000], default=48000)
     timing_import.set_defaults(func=cmd_import_timings)
     timing_export = sub.add_parser("export-timings", help="Export saved timing points as CSV data")
     timing_export.add_argument("--project-dir", required=True)
@@ -361,6 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["filename", "title", "title-artist", "artist-title"],
     )
     timing_export.add_argument("--include-radio", action="store_true")
+    timing_export.add_argument("--time-unit", choices=["time", "samples"], default="time")
+    timing_export.add_argument("--sample-rate", type=int, choices=[48000], default=48000)
     timing_export.set_defaults(func=cmd_export_timings)
 
     estimate = sub.add_parser("estimate-package", help="Read-only estimated package file sizes")
@@ -379,6 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
         "music", nargs="*", help="Music files or directories to pack into the target bank"
     )
     package.add_argument("--out-dir", required=True, help="Output package directory")
+    package.add_argument(
+        "--reuse-package", help="Previous completed package for unchanged radio bank reuse"
+    )
     package.add_argument("--radio", type=int, required=True, help="Target FH6 radio number")
     package.add_argument(
         "--source-audio-dir",

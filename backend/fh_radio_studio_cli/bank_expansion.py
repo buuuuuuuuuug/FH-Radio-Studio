@@ -153,18 +153,23 @@ def _fsb_records(fsb: bytes):
     return records, fsb[60 + headers + names : 60 + headers + names + data_size]
 
 
-def _normalize_fsb(fsb: bytes, cue_template: bytes) -> bytes:
+def _normalize_fsb(fsb: bytes, cue_template: bytes | None) -> bytes:
     records, audio = _fsb_records(fsb)
     header_records = bytearray()
+    metadata_kinds = [4, 11, 13] if cue_template is not None else [11, 13]
     for basic, chunks in records:
         if 11 not in chunks or 13 not in chunks:
             raise CliError("Expansion requires Vorbis and peak-volume metadata")
-        chunks[4] = cue_template
-        if set(chunks) != {4, 11, 13}:
+        # FH6 content-update banks have no embedded cue chunk. Match the
+        # original bank instead of requiring cues or copying them from another bank.
+        chunks.pop(4, None)
+        if cue_template is not None:
+            chunks[4] = cue_template
+        if set(chunks) != set(metadata_kinds):
             raise CliError(f"Unsupported FSB5 metadata kinds: {sorted(chunks)}")
         word = struct.unpack("<Q", basic)[0] | 1
         header_records.extend(struct.pack("<Q", word))
-        for kind in [4, 11, 13]:
+        for kind in metadata_kinds:
             payload = chunks[kind]
             extra = (kind << 25) | (len(payload) << 1) | (kind != 13)
             header_records.extend(struct.pack("<I", extra))
@@ -205,8 +210,8 @@ def rebuild_expanded_bank(
     if len(old_records) != original_count:
         raise CliError("Original FSB count changed during build")
     cues = old_records[0][1].get(4)
-    if not cues:
-        raise CliError("Original radio bank has no cue template")
+    if cues == b"":
+        raise CliError(f"Original radio bank has an empty cue template: {original.name}")
     new_fsb = _normalize_fsb(encoded, cues)
     records, _ = _fsb_records(new_fsb)
     if len(names) != len(records) or len(set(names)) != len(names):
@@ -270,7 +275,7 @@ def validate_expanded_bank_bytes(raw: bytes, names: list[str]) -> None:
         raise CliError("Expanded bank record count mismatch")
     mappings = _read_stbl(raw[stbl:stbl_stop])
     for i, ((basic, chunks), name) in enumerate(zip(records, names)):
-        if mappings.get(sound_hash(name)) != i or list(chunks) != [4, 11, 13]:
+        if mappings.get(sound_hash(name)) != i or list(chunks) not in ([4, 11, 13], [11, 13]):
             raise CliError("Expanded sound lookup or metadata order mismatch")
         data_offset = ((struct.unpack("<Q", basic)[0] >> 6) & 0xFFFFFFF) * 16
         if data_offset >= len(audio):

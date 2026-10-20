@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from .common import CliError
 from .metadata import (
     build_track_metadata_cache_entry,
     collect_audio_files,
@@ -645,9 +646,14 @@ def _read_json(path: Path) -> Any:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as error:
+        raise CliError(
+            f"Existing project data could not be read safely: {path}: {error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise CliError(f"Existing project data must contain a JSON object: {path}")
+    return payload
 
 
 def _path_from_value(value: object) -> Optional[Path]:

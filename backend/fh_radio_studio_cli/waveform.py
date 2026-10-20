@@ -1,4 +1,4 @@
-"""Cached waveform decoding without beat detection, MIR or AI model execution."""
+"""Cached waveform decoding, without beat detection or AI models."""
 
 import math
 
@@ -40,7 +40,7 @@ def waveform_payload(source: Path, bins: int = 8192, ffmpeg: Optional[str] = Non
         "loop_candidates": {},
         "warnings": [],
         "decoder": decoder,
-        "ai_note": "仅解码波形；未运行 AI",
+        "ai_note": "仅波形；未运行 AI",
     }
 
 
@@ -49,7 +49,7 @@ def cmd_waveform_audio(args):
     stat = source.stat()
     cache = Path(args.cache_dir).expanduser() if args.cache_dir else None
     key = hashlib.sha256(
-        f"v1:{source}:{stat.st_size}:{stat.st_mtime_ns}:{args.bins}".encode()
+        f"v3:{source}:{stat.st_size}:{stat.st_mtime_ns}:{args.bins}".encode()
     ).hexdigest()
     file = cache / f"{key}.json" if cache else None
     if file and file.is_file():

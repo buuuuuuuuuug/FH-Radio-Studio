@@ -30,6 +30,70 @@ class NativeLoopPoint(ctypes.Structure):
     ]
 
 
+def _valid_loop_result(result, source: Path, dll_hash: str, top_n: int) -> bool:
+    """Treat incomplete or invalid cached results as a cache miss."""
+    if not isinstance(result, dict) or (
+        result.get("schema_version") != 1
+        or result.get("source") != str(source)
+        or result.get("loop_engine") != "seamless-loop-music"
+        or result.get("native_library_sha256") != dll_hash
+    ):
+        return False
+    sr, samples = result.get("sample_rate"), result.get("samples")
+    if type(sr) is not int or type(samples) is not int or sr <= 0 or samples <= 0:
+        return False
+    try:
+        duration = result.get("duration_sec")
+        if (
+            isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not math.isfinite(duration)
+            or abs(duration - samples / sr) > 1e-6
+        ):
+            return False
+        groups = result.get("candidates")
+        if not isinstance(groups, dict):
+            return False
+        for group in ("tl", "pl"):
+            candidates = groups.get(group)
+            if not isinstance(candidates, list) or not 1 <= len(candidates) <= top_n:
+                return False
+            seen = set()
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    return False
+                values = [candidate.get(k) for k in ("start", "end", "score")]
+                if any(
+                    isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                    for v in values
+                ):
+                    return False
+                start, end, score = values
+                if not 0 <= start < end <= duration or not 0 <= score <= 1:
+                    return False
+                if (start, end) in seen:
+                    return False
+                seen.add((start, end))
+                evidence = candidate.get("evidence")
+                if not isinstance(evidence, dict) or evidence.get("sample_rate") != sr:
+                    return False
+                a, b = evidence.get("start_sample"), evidence.get("end_sample")
+                if type(a) is not int or type(b) is not int or not 0 <= a < b <= samples:
+                    return False
+                if abs(start - a / sr) > 1e-9 or abs(end - b / sr) > 1e-9:
+                    return False
+                if any(
+                    isinstance(evidence.get(k), bool)
+                    or not isinstance(evidence.get(k), (int, float))
+                    or not math.isfinite(evidence[k])
+                    for k in ("native_score", "note_difference", "loudness_difference")
+                ):
+                    return False
+    except (OverflowError, ValueError, TypeError):
+        return False
+    return True
+
+
 def _native_path(path: Path) -> bytes:
     text = str(path)
     if os.name == "nt":
@@ -70,7 +134,7 @@ def analyze_seamless(
     if cache and cache.is_file() and not force:
         try:
             result = json.loads(cache.read_text(encoding="utf-8"))
-            if result.get("loop_engine") == "seamless-loop-music" and result.get("candidates"):
+            if _valid_loop_result(result, source, dll_hash, top_n):
                 result["cached"] = True
                 return result
         except (OSError, ValueError):
@@ -143,6 +207,8 @@ def analyze_seamless(
         "cached": False,
         "runtime_ms": round((time.perf_counter() - started) * 1000),
     }
+    if not _valid_loop_result(result, source, dll_hash, top_n):
+        raise ValueError("SeamlessLoopMusic returned inconsistent loop data")
     if cache:
         cache.parent.mkdir(parents=True, exist_ok=True)
         # Parallel editor and batch requests must never share a temporary file.

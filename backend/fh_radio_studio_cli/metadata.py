@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from .common import die, path_key, sf
+from .file_lock import exclusive_file_lock
 from .project_json_guard import write_project_json
 from .project_refs import (
     ProjectRefError,
@@ -171,47 +172,9 @@ def metadata_cache_path(project_dir: Path) -> Path:
 def _metadata_cache_write_lock(cache_path: Path, *, timeout_sec: float = 120.0):
     """Serialize metadata cache read-modify-write transactions across processes."""
     lock_path = cache_path.with_name(f"{cache_path.name}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + timeout_sec
     with _METADATA_CACHE_THREAD_LOCK:
-        with lock_path.open("a+b") as handle:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                while True:
-                    try:
-                        handle.seek(0)
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                        break
-                    except OSError:
-                        if time.monotonic() >= deadline:
-                            raise TimeoutError(f"Timed out locking metadata cache: {cache_path}")
-                        time.sleep(0.02)
-                try:
-                    yield
-                finally:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                while True:
-                    try:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise TimeoutError(f"Timed out locking metadata cache: {cache_path}")
-                        time.sleep(0.02)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path, timeout_sec=timeout_sec):
+            yield
 
 
 def infer_metadata_cache_path_from_timing_manifest(
@@ -443,10 +406,10 @@ def _load_cache_entries(cache_path: Path) -> Dict[str, Dict[str, object]]:
                 ) from last_error
             time.sleep(0.02)
     if not isinstance(decoded, dict):
-        return {}
+        die(f"Existing metadata cache must contain a JSON object: {cache_path}")
     tracks = decoded.get("tracks")
     if not isinstance(tracks, list):
-        return {}
+        die(f"Existing metadata cache must contain a tracks array: {cache_path}")
     project_dir = cache_path.parent.parent if cache_path.parent.name == ".fh-radio-studio" else None
     out: Dict[str, Dict[str, object]] = {}
     for item in tracks:

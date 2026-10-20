@@ -21,6 +21,14 @@ from .common import CliError
 from .metadata import _load_cache_entries, metadata_cache_path, read_track_metadata
 from .project_json_guard import write_project_json
 from .project_refs import project_path_or_absolute, resolve_project_ref
+from .radio_timing_import import radio_assignment_layouts, radio_info_rows
+from .timing_units import (
+    SAMPLE_RATE,
+    row_time_unit,
+    samples_to_seconds,
+    seconds_to_samples,
+    validate_units,
+)
 
 GROUPS = {
     "td": ("TrackDrop",),
@@ -30,6 +38,10 @@ GROUPS = {
 }
 ALIASES = {
     "trackkey": "track_key",
+    "samplerate": "sample_rate",
+    "采样率": "sample_rate",
+    "timeunit": "time_unit",
+    "时间单位": "time_unit",
     "radiostation": "radio_station",
     "文件": "file",
     "文件名": "file",
@@ -223,13 +235,26 @@ def parse_rows(raw, format):
         raise CliError("导入数据过大，最多 8 MB")
     if format == "xlsx":
         return _xlsx(raw)
+    if format == "xml" or raw.lstrip(b"\xef\xbb\xbf\x00 \t\r\n").startswith(b"<"):
+        return radio_info_rows(raw)
     text = raw.decode("utf-8-sig")
     if not text.strip():
         raise CliError("导入内容为空")
     if format == "json" or text.lstrip().startswith(("[", "{")):
         data = json.loads(text)
         if isinstance(data, dict):
-            data = data.get("tracks", data.get("rows", [data]))
+            rows = data.get("tracks", data.get("rows"))
+            if rows is not None:
+                if not isinstance(rows, list):
+                    raise CliError("JSON 需要歌曲数组或包含 tracks 的对象")
+                units = {
+                    ALIASES.get(key(k), k): v
+                    for k, v in data.items()
+                    if ALIASES.get(key(k), k) in ("time_unit", "sample_rate")
+                }
+                data = [dict(units, **row) if isinstance(row, dict) else row for row in rows]
+            else:
+                data = [data]
         if not isinstance(data, list):
             raise CliError("JSON 需要歌曲数组或包含 tracks 的对象")
         return data
@@ -243,18 +268,37 @@ def _normalized(row):
     if not isinstance(row, dict):
         raise ValueError("每首歌需要一个对象")
     out = {}
+    marker_units = set()
+
+    def add(column, value):
+        name = ALIASES.get(key(column), column)
+        if name in out:
+            raise ValueError(f"同一行存在重复字段（包括同义字段）：{name}")
+        out[name] = value
+
     for k, v in row.items():
-        if k == "markers_sec" and isinstance(v, dict):
+        if k in ("markers_sec", "markers_samples") and isinstance(v, dict):
+            unit = "samples" if k == "markers_samples" else "time"
+            marker_units.add(unit)
             for marker, value in v.items():
-                out[ALIASES.get(key(marker), marker)] = value
+                add(marker, value)
         else:
-            out[ALIASES.get(key(k), k)] = v
+            add(k, v)
+    if marker_units:
+        if len(marker_units) > 1:
+            raise ValueError("同一行不能混用秒和采样点时间组")
+        inferred = next(iter(marker_units))
+        if "time_unit" in out and row_time_unit(out) != inferred:
+            raise ValueError("时间单位与 markers_sec / markers_samples 不一致")
+        out["time_unit"] = inferred
     for group, columns in [("tl", GROUPS["tl"]), ("pl", GROUPS["pl"])]:
         raw = out.get(group + "_range")
         if raw is not None:
             parts = re.split(r"\s*(?:->|→|–|—|\s-\s)\s*", str(raw))
             if len(parts) != 2:
                 raise ValueError(f"{group.upper()} 需要起止两个时间，用 → 或空格-空格分隔")
+            if any(column in out for column in columns):
+                raise ValueError(f"{group.upper()} 范围与单独起止字段重复，请只保留一种表示")
             out.update(zip(columns, parts))
     return out
 
@@ -352,7 +396,10 @@ def _saved_radios(project):
     return result
 
 
-def export_timings(project, identity="filename", *, include_radio=False):
+def export_timings(
+    project, identity="filename", *, include_radio=False, time_unit="time", sample_rate=SAMPLE_RATE
+):
+    validate_units(time_unit, sample_rate)
     if identity not in MATCH_MODES[1:]:
         raise CliError("未知导出标识方式")
     timing = project / "analysis/track_timing.json"
@@ -370,7 +417,7 @@ def export_timings(project, identity="filename", *, include_radio=False):
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer)
     writer.writerow(
-        (CSV_COLUMNS[0], "Radio_station", *CSV_COLUMNS[1:]) if include_radio else CSV_COLUMNS
+        [CSV_COLUMNS[0]] + (["Radio_station"] if include_radio else []) + list(CSV_COLUMNS[1:])
     )
     stations = _saved_radios(project) if include_radio else {}
     count, names = 0, []
@@ -409,12 +456,17 @@ def export_timings(project, identity="filename", *, include_radio=False):
                 and math.isfinite(value)
                 and value >= 0
             ):
-                millis = round(value * 1000)
-                values.append(f"{millis // 60000}:{(millis // 1000) % 60:02d}.{millis % 1000:03d}")
+                if time_unit == "samples":
+                    values.append(seconds_to_samples(value))
+                else:
+                    millis = round(value * 1000)
+                    values.append(
+                        f"{millis // 60000}:{(millis // 1000) % 60:02d}.{millis % 1000:03d}"
+                    )
             else:
                 raise CliError(f"歌曲 {name} 包含无效时间点，导出已停止")
         radio = ";".join(sorted(stations.get(entry["track_key"], [])))
-        writer.writerow([name, radio, *values] if include_radio else [name, *values])
+        writer.writerow([name] + ([radio] if include_radio else []) + values)
         names.append(identity_key(name))
         count += 1
     duplicates = len(names) - len(set(names))
@@ -423,6 +475,8 @@ def export_timings(project, identity="filename", *, include_radio=False):
         "csv": buffer.getvalue(),
         "count": count,
         "identity": identity,
+        "time_unit": time_unit,
+        "sample_rate": SAMPLE_RATE if time_unit == "samples" else None,
         "warning": "标识存在重名，建议使用文件名导出并核对预览。" if duplicates else "",
     }
 
@@ -433,6 +487,8 @@ def cmd_export_timings(args):
             Path(args.project_dir),
             args.identity,
             include_radio=getattr(args, "include_radio", False),
+            time_unit=getattr(args, "time_unit", "time"),
+            sample_rate=getattr(args, "sample_rate", SAMPLE_RATE),
         )
     except (ValueError, OSError) as error:
         raise CliError(str(error)) from error
@@ -441,8 +497,18 @@ def cmd_export_timings(args):
 
 
 def preview_import(
-    project, raw, format, *, overwrite=False, confirm=False, match_mode="auto", assign_radio=False
+    project,
+    raw,
+    format,
+    *,
+    overwrite=False,
+    confirm=False,
+    match_mode="auto",
+    assign_radio=False,
+    time_unit="time",
+    sample_rate=SAMPLE_RATE,
 ):
+    validate_units(time_unit, sample_rate)
     timing = project / "analysis/track_timing.json"
     timing_raw = timing.read_bytes() if timing.exists() else b""
     metadata_raw = metadata_cache_path(project).read_bytes()
@@ -464,6 +530,7 @@ def preview_import(
         if c.get("track_key") and c.get("source_ref")
     }
     rows = parse_rows(raw, format)
+    is_radio_info = format == "xml" or raw.lstrip(b"\xef\xbb\xbf\x00 \t\r\n").startswith(b"<")
     if not rows:
         raise CliError("没有找到时间点数据；请使用带“文件名/歌曲名”和 TD/PD/TL/PL 的表头")
     if len(rows) > 10000:
@@ -472,17 +539,29 @@ def preview_import(
     proposals = {}
     seen = {}
     seen_radios = {}
+    conflicts = set()
     for number, row in enumerate(rows, 1):
         result = {"row": number, "status": "error", "title": "", "message": ""}
         output.append(result)
+        if is_radio_info:
+            result.update(radio_code=row.get("_radio_code"), sound_name=row.get("_sound_name"))
         try:
             data = _normalized(row)
-            matches = match_tracks(project, data, entries, match_mode)
+            if is_radio_info:
+                result["title"] = f'{data.get("artist", "")} - {data.get("title", "")}'
+                if data.get("_input_error"):
+                    raise ValueError(data["_input_error"])
+            parser = (
+                samples_to_seconds if row_time_unit(data, time_unit) == "samples" else time_value
+            )
+            matches = match_tracks(project, data, entries, "auto" if is_radio_info else match_mode)
             if len(matches) != 1:
                 raise ValueError(
                     "未找到对应歌曲" if not matches else "匹配到多首歌曲，请提供文件名或 track_key"
                 )
             track_key = matches[0]
+            if track_key in conflicts:
+                raise ValueError("同一歌曲存在冲突数据，未导入该歌曲")
             entry = entries[track_key]
             result.update(
                 track_key=track_key, title=f'{entry.get("artist","")} - {entry.get("title","")}'
@@ -493,6 +572,7 @@ def preview_import(
             result["source"] = str(source)
             if not source.is_file():
                 raise ValueError("对应歌曲文件不存在")
+            result["source_matched"] = True
             duration = entry.get("duration_sec")
             stat = source.stat()
             if (
@@ -523,7 +603,7 @@ def preview_import(
                 if not present:
                     continue
                 supplied = {
-                    c: time_value(data[c])
+                    c: parser(data[c])
                     for c in present
                     if data[c] is not None and str(data[c]).strip()
                 }
@@ -569,11 +649,20 @@ def preview_import(
                 next["bpm"] = bpm
             if track_key in seen:
                 previous = seen[track_key]
+                if is_radio_info and proposals.get(track_key) == next:
+                    stations = sorted(set(seen_radios[track_key]) | set(stations))
+                    seen_radios[track_key] = stations
+                    previous["radio_stations"] = stations
+                    if stations:
+                        previous["message"] = "导入 XML 时间点；分配至 " + ", ".join(stations)
+                    result.update(status="skipped", message="相同歌曲时间点已合并")
+                    continue
                 if proposals.get(track_key) == next and seen_radios.get(track_key) == stations:
                     result.update(status="skipped", message="与前一行相同，已合并")
                     continue
                 previous.update(status="error", message="同一歌曲出现冲突数据，未导入该歌曲")
                 proposals.pop(track_key, None)
+                conflicts.add(track_key)
                 raise ValueError("同一歌曲出现多行冲突数据")
             seen[track_key] = result
             seen_radios[track_key] = stations
@@ -591,12 +680,35 @@ def preview_import(
             )
         except (ValueError, TypeError, KeyError, OSError) as error:
             result["message"] = str(error)
+    layouts = (
+        radio_assignment_layouts(project, raw, output) if is_radio_info and assign_radio else []
+    )
+    restored = {layout["radio_code"] for layout in layouts if layout["mode"] == "builtin"}
+    for row in output:
+        if row.get("radio_code") in restored and row["status"] == "error":
+            row.update(status="builtin", message="原版曲目随电台恢复，无需匹配本地文件")
     return {
         "schema_version": 1,
+        "radio_layouts": layouts,
         "snapshot_hash": _sha(timing_raw + metadata_raw),
         "input_hash": _sha(
-            raw + json.dumps([overwrite, confirm, match_mode, assign_radio]).encode("utf-8")
+            raw
+            + json.dumps(
+                [
+                    overwrite,
+                    confirm,
+                    match_mode,
+                    assign_radio,
+                    format,
+                    time_unit,
+                    sample_rate,
+                    layouts,
+                ]
+            ).encode("utf-8")
         ),
+        "time_unit": "samples" if is_radio_info else time_unit,
+        "source_format": "radio-info" if is_radio_info else format,
+        "sample_rate": SAMPLE_RATE,
         "rows": output,
         "ready_count": sum(c["status"] == "ready" for c in output),
         "_proposals": proposals,
@@ -622,6 +734,8 @@ def import_timings(args):
         confirm=args.confirm,
         match_mode=getattr(args, "match_mode", "auto"),
         assign_radio=getattr(args, "assign_radio", False),
+        time_unit=getattr(args, "time_unit", "time"),
+        sample_rate=getattr(args, "sample_rate", SAMPLE_RATE),
     )
     proposals = result.pop("_proposals")
     doc = result.pop("_document")
@@ -632,6 +746,9 @@ def import_timings(args):
         ):
             raise CliError("文件或项目点位已变化，请重新预览后再导入")
         if not proposals:
+            if any(layout["mode"] in ("builtin", "custom") for layout in result["radio_layouts"]):
+                result.update(applied_count=0)
+                return result
             raise CliError("没有可以导入的数据")
         path = project / "analysis/track_timing.json"
         cache = metadata_cache_path(project).read_bytes()

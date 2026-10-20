@@ -5,7 +5,13 @@ from time import perf_counter
 
 from .baseline_order import is_baseline_derived_index_path, write_baseline_bank_order_index
 from .common import *
-from .game import audio_dir_for, resolve_game_dir, steam_game_version
+from .deployment_paths import contained_game_path
+from .file_transaction import (
+    game_file_write_lock,
+    preserve_directory_on_failure,
+    replace_files_atomically,
+)
+from .game import audio_dir_for, game_root_for, resolve_game_dir, steam_game_version
 from .package import collect_package_deploy_files, package_audio_dir
 from .project_json_guard import write_project_json
 from .project_refs import is_project_ref, project_path_or_absolute, resolve_project_ref
@@ -204,10 +210,9 @@ def _hash_paths(
 
 
 def _path_from_install_relative(root: Path, relative_path: str) -> Optional[Path]:
-    normalized = relative_path.replace("\\", "/").strip("/")
-    if not normalized:
+    if not relative_path:
         return None
-    return root / Path(*normalized.split("/"))
+    return contained_game_path(root, relative_path)
 
 
 def resolve_baseline_backup_path(
@@ -654,74 +659,80 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             print("\nDry run only. Re-run with --yes to create the baseline.")
             return 0
 
-        if out_dir.exists() and args.overwrite:
-            shutil.rmtree(out_dir)
+        output_root = out_dir.resolve()
+        for item in files:
+            source = Path(str(item["source_game_path"])).resolve()
+            if output_root == source or output_root in source.parents:
+                die("Baseline output directory must not contain source game files.")
+        with preserve_directory_on_failure(out_dir):
+            manifest_files = []
+            project_dir = _project_root_from_baseline_dir(out_dir)
+            for item in files:
+                rel_text = str(item["relative_path"]).replace("\\", "/")
+                install_rel_text = str(item["install_relative_path"]).replace("\\", "/")
+                game_src = Path(str(item["source_game_path"]))
+                if not game_src.exists():
+                    die(f"Game file missing; cannot baseline: {game_src}")
+                manifest_item: Dict[str, object] = {
+                    "relative_path": rel_text,
+                    "install_relative_path": install_rel_text,
+                    "scope": item.get("scope"),
+                    "source_game_path": str(game_src.resolve()),
+                    "md5": item.get("md5"),
+                    "package_path": (
+                        project_path_or_absolute(project_dir, Path(str(item.get("package_path"))))
+                        if project_dir is not None and item.get("package_path")
+                        else item.get("package_path")
+                    ),
+                    "package_md5": item.get("package_md5"),
+                }
+                backup = out_dir / Path(*install_rel_text.split("/"))
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(game_src, backup)
+                if item.get("md5") and md5_file(backup) != item["md5"]:
+                    die(f"Game source changed while creating baseline: {game_src}")
+                manifest_item["backup_path"] = (
+                    project_path_or_absolute(project_dir, backup)
+                    if project_dir is not None
+                    else str(backup.resolve())
+                )
+                manifest_item["size"] = file_size(backup)
+                manifest_files.append(manifest_item)
+                print(f"  saved {install_rel_text}")
+
+            manifest_data: Dict[str, object] = {
+                "schema_version": 1,
+                "kind": "game_baseline",
+                "state": args.state,
+                "backup_name": baseline_backup_name(args.state, game_version),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "game_dir": str(game_dir),
+                "audio_dir": str(audio_dir),
+                "game_version": game_version,
+                "game_version_id": baseline_version_id(game_version),
+                "supported_game_version_ids": [baseline_version_id(game_version)],
+                "package_audio": (
+                    project_path_or_absolute(project_dir, package_audio)
+                    if project_dir is not None and package_audio
+                    else (str(package_audio.resolve()) if package_audio else None)
+                ),
+                "file_count": len(manifest_files),
+                "by_scope": plan.get("by_scope", {}),
+                "files": manifest_files,
+            }
+            bank_order_index = write_baseline_bank_order_index(out_dir, manifest_data)
+            if bank_order_index:
+                manifest_data["derived_indexes"] = {"bank_order": bank_order_index}
+                print(
+                    "Derived bank order index: "
+                    f"{out_dir / str(bank_order_index['relative_path'])} "
+                    f"({bank_order_index['ok_bank_count']}/{bank_order_index['bank_count']} banks matched)"
+                )
+
+            write_project_json(manifest_path, manifest_data, project_dir=project_dir)
         if args.overwrite and args.state == "current":
             for cleared in _clear_prepared_packages_for_overwrite(out_dir):
                 print(f"  cleared package artifact {cleared}")
-        manifest_files = []
-        project_dir = _project_root_from_baseline_dir(out_dir)
-        for item in files:
-            rel_text = str(item["relative_path"]).replace("\\", "/")
-            install_rel_text = str(item["install_relative_path"]).replace("\\", "/")
-            game_src = Path(str(item["source_game_path"]))
-            if not game_src.exists():
-                die(f"Game file missing; cannot baseline: {game_src}")
-            manifest_item: Dict[str, object] = {
-                "relative_path": rel_text,
-                "install_relative_path": install_rel_text,
-                "scope": item.get("scope"),
-                "source_game_path": str(game_src.resolve()),
-                "md5": item.get("md5"),
-                "package_path": (
-                    project_path_or_absolute(project_dir, Path(str(item.get("package_path"))))
-                    if project_dir is not None and item.get("package_path")
-                    else item.get("package_path")
-                ),
-                "package_md5": item.get("package_md5"),
-            }
-            backup = out_dir / Path(*install_rel_text.split("/"))
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(game_src, backup)
-            manifest_item["backup_path"] = (
-                project_path_or_absolute(project_dir, backup)
-                if project_dir is not None
-                else str(backup.resolve())
-            )
-            manifest_item["size"] = file_size(backup)
-            manifest_files.append(manifest_item)
-            print(f"  saved {install_rel_text}")
-
-        manifest_data: Dict[str, object] = {
-            "schema_version": 1,
-            "kind": "game_baseline",
-            "state": args.state,
-            "backup_name": baseline_backup_name(args.state, game_version),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "game_dir": str(game_dir),
-            "audio_dir": str(audio_dir),
-            "game_version": game_version,
-            "game_version_id": baseline_version_id(game_version),
-            "supported_game_version_ids": [baseline_version_id(game_version)],
-            "package_audio": (
-                project_path_or_absolute(project_dir, package_audio)
-                if project_dir is not None and package_audio
-                else (str(package_audio.resolve()) if package_audio else None)
-            ),
-            "file_count": len(manifest_files),
-            "by_scope": plan.get("by_scope", {}),
-            "files": manifest_files,
-        }
-        bank_order_index = write_baseline_bank_order_index(out_dir, manifest_data)
-        if bank_order_index:
-            manifest_data["derived_indexes"] = {"bank_order": bank_order_index}
-            print(
-                "Derived bank order index: "
-                f"{out_dir / str(bank_order_index['relative_path'])} "
-                f"({bank_order_index['ok_bank_count']}/{bank_order_index['bank_count']} banks matched)"
-            )
-
-        write_project_json(manifest_path, manifest_data, project_dir=project_dir)
         print(f"Baseline manifest: {manifest_path}")
         return 0
 
@@ -750,9 +761,28 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             print("\nDry run only. Re-run with --yes to promote pending baseline.")
             return 0
 
-        if current_dir.exists():
-            shutil.rmtree(current_dir)
         pending_manifest_data = load_manifest(pending_manifest)
+        if (
+            not isinstance(pending_manifest_data.get("files"), list)
+            or not pending_manifest_data["files"]
+        ):
+            die(f"Pending baseline has no file list: {pending_manifest}")
+        for item in pending_manifest_data["files"]:
+            if not isinstance(item, dict):
+                die(f"Invalid pending baseline file entry: {pending_manifest}")
+            if item.get("manifest_only") or is_baseline_derived_index_path(
+                item.get("install_relative_path")
+            ):
+                continue
+            saved = resolve_baseline_backup_path(pending_manifest, item)
+            if saved is None or not saved.is_file():
+                die(f"Pending baseline file missing: {saved}")
+            expected_md5 = item.get("md5")
+            if expected_md5 and md5_file(saved) != expected_md5:
+                die(f"Pending baseline file differs from its manifest: {saved}")
+        roots = {current_dir.resolve(), pending_dir.resolve(), target_current_dir.resolve()}
+        if any(a in b.parents for a in roots for b in roots if a != b):
+            die("Baseline promotion directories must not contain one another.")
         pending_manifest_data["state"] = "current"
         pending_manifest_data["backup_name"] = baseline_backup_name(
             "current", pending_manifest_data.get("game_version")
@@ -764,14 +794,23 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             pending_manifest_data["game_version_id"]
         ]
         pending_manifest_data["promoted_at"] = datetime.now(timezone.utc).isoformat()
-        shutil.move(str(pending_dir), str(target_current_dir))
         target_manifest = baseline_manifest_path(target_current_dir)
         _rewrite_manifest_backup_paths(pending_manifest_data, target_manifest)
-        write_project_json(
-            target_manifest,
-            pending_manifest_data,
-            project_dir=_project_root_from_baseline_dir(target_current_dir),
-        )
+        with preserve_directory_on_failure(current_dir):
+            moved_pending = False
+            try:
+                target_current_dir.parent.mkdir(parents=True, exist_ok=True)
+                pending_dir.replace(target_current_dir)
+                moved_pending = True
+                write_project_json(
+                    target_manifest,
+                    pending_manifest_data,
+                    project_dir=_project_root_from_baseline_dir(target_current_dir),
+                )
+            except BaseException:
+                if moved_pending:
+                    target_current_dir.replace(pending_dir)
+                raise
         print(f"Promoted pending baseline to: {target_current_dir}")
         return 0
 
@@ -787,90 +826,76 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         return 0
 
     if args.baseline_action == "apply":
-        game_dir = resolve_game_dir(args.game_dir)
-        audio_dir = audio_dir_for(game_dir)
-        game_version = steam_game_version(game_dir)
-        baseline_dir = Path(args.baseline_dir).expanduser()
-        manifest_path = baseline_manifest_path(baseline_dir)
-        if not manifest_path.exists():
-            die(f"Baseline manifest not found: {manifest_path}")
-        manifest = load_manifest(manifest_path)
-        baseline_game_version = manifest.get("game_version")
-        game_build = baseline_version_id(game_version)
-        if game_build != "unknown" and not baseline_supports_game_version(manifest, game_version):
-            die(
-                "Steam build mismatch: "
-                f"game is {describe_game_version(game_version)}, "
-                f"baseline is {describe_game_version(baseline_game_version)}"
-            )
-        files = [
-            item
-            for item in list(manifest.get("files", []))
-            if isinstance(item, dict)
-            and not is_baseline_derived_index_path(item.get("relative_path"))
-            and not is_baseline_derived_index_path(item.get("install_relative_path"))
-        ]
-        if not files:
-            die(f"Baseline has no files: {manifest_path}")
-
-        print(f"Game audio : {audio_dir}")
-        print(f"Baseline   : {baseline_dir}")
-        print(f"Game build : {describe_game_version(game_version)}")
-        print(f"Baseline   : {describe_game_version(baseline_game_version)}")
-        print(
-            "Restore warning: this will overwrite game files directly. "
-            "No additional backup or restore log will be created."
-        )
-        print("Plan:")
-        for item in files:
-            rel_text = str(item.get("relative_path") or "").replace("\\", "/")
-            install_rel_text = str(item.get("install_relative_path") or "").replace("\\", "/")
-            if not rel_text:
-                die(f"Baseline entry is missing relative_path in {manifest_path}")
-            source_preview = (
-                baseline_dir / Path(*install_rel_text.split("/"))
-                if install_rel_text
-                else baseline_dir / "media" / "audio" / Path(*rel_text.split("/"))
-            )
-            dest_preview = (
-                game_dir / Path(*install_rel_text.split("/"))
-                if install_rel_text
-                else audio_dir / Path(*rel_text.split("/"))
-            )
-            print(f"  {source_preview} -> {dest_preview}")
-
-        if not args.yes:
-            print(
-                "\nDry run only. Re-run with --yes to copy baseline files into the game directory."
-            )
-            return 0
-
-        for item in files:
-            rel_text = str(item.get("relative_path") or "").replace("\\", "/")
-            install_rel_text = str(item.get("install_relative_path") or "").replace("\\", "/")
-            if not rel_text:
-                die(f"Baseline entry is missing relative_path in {manifest_path}")
-            rel = Path(*rel_text.split("/"))
-            saved = resolve_baseline_backup_path(manifest_path, item)
-            if not saved or not saved.exists():
-                die(f"Baseline file missing: {saved}")
-            expected_md5 = item.get("md5")
-            saved_md5 = md5_file(saved)
-            if isinstance(expected_md5, str) and expected_md5 and saved_md5 != expected_md5:
+        game_dir = game_root_for(resolve_game_dir(args.game_dir))
+        with game_file_write_lock(game_dir, enabled=args.yes):
+            audio_dir = audio_dir_for(game_dir)
+            game_version = steam_game_version(game_dir)
+            baseline_dir = Path(args.baseline_dir).expanduser()
+            manifest_path = baseline_manifest_path(baseline_dir)
+            if not manifest_path.exists():
+                die(f"Baseline manifest not found: {manifest_path}")
+            manifest = load_manifest(manifest_path)
+            baseline_game_version = manifest.get("game_version")
+            game_build = baseline_version_id(game_version)
+            if game_build != "unknown" and not baseline_supports_game_version(
+                manifest, game_version
+            ):
                 die(
-                    f"Baseline MD5 mismatch for {rel_text}: expected {expected_md5}, got {saved_md5}"
+                    "Steam build mismatch: "
+                    f"game is {describe_game_version(game_version)}, "
+                    f"baseline is {describe_game_version(baseline_game_version)}"
                 )
-            dest = (
-                game_dir / Path(*install_rel_text.split("/"))
-                if install_rel_text
-                else audio_dir / rel
-            )
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(saved, dest)
-            print(f"  applied {rel_text}")
+            files = [
+                item
+                for item in list(manifest.get("files", []))
+                if isinstance(item, dict)
+                and not is_baseline_derived_index_path(item.get("relative_path"))
+                and not is_baseline_derived_index_path(item.get("install_relative_path"))
+            ]
+            if not files:
+                die(f"Baseline has no files: {manifest_path}")
 
-        print("Baseline applied. No backup or restore log was created.")
-        return 0
+            print(f"Game audio : {audio_dir}")
+            print(f"Baseline   : {baseline_dir}")
+            print(f"Game build : {describe_game_version(game_version)}")
+            print(f"Baseline   : {describe_game_version(baseline_game_version)}")
+            print(
+                "Restore warning: this will overwrite game files directly. "
+                "No additional backup or restore log will be created."
+            )
+            print("Plan:")
+            replacements = []
+            for item in files:
+                rel_text = str(item.get("relative_path") or "").replace("\\", "/")
+                install_rel_text = str(item.get("install_relative_path") or "").replace("\\", "/")
+                if not rel_text:
+                    die(f"Baseline entry is missing relative_path in {manifest_path}")
+                if not install_rel_text:
+                    install_rel_text = f"media/audio/{rel_text}"
+                dest = contained_game_path(game_dir, install_rel_text)
+                saved = resolve_baseline_backup_path(manifest_path, item)
+                if not saved or not saved.is_file():
+                    die(f"Baseline file missing: {saved}")
+                expected_md5 = item.get("md5")
+                saved_md5 = md5_file(saved)
+                if isinstance(expected_md5, str) and expected_md5 and saved_md5 != expected_md5:
+                    die(
+                        f"Baseline MD5 mismatch for {rel_text}: expected {expected_md5}, got {saved_md5}"
+                    )
+                replacements.append((saved, dest, saved_md5))
+                print(f"  {saved} -> {dest}")
+
+            if not args.yes:
+                print(
+                    "\nDry run only. Re-run with --yes to copy baseline files into the game directory."
+                )
+                return 0
+            replace_files_atomically(replacements)
+            for item in files:
+                print(f"  applied {item['relative_path']}")
+
+            print("Baseline applied. No backup or restore log was created.")
+            return 0
 
     if args.baseline_action == "bump-build":
         game_dir = resolve_game_dir(args.game_dir)

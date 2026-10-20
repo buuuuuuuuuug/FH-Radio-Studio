@@ -21,8 +21,16 @@ def deployment_relative_path(package_path: str, target_root: str = "mediapc") ->
 
 
 def contained_game_path(game_dir: Path, relative_path: str) -> Path:
+    raw = str(relative_path).replace("\\", "/")
+    if (
+        not raw
+        or raw.startswith("/")
+        or any(part in {".", ".."} or ":" in part for part in raw.split("/"))
+        or any(ord(char) < 32 or ord(char) == 127 for char in raw)
+    ):
+        raise CliError(f"Unsafe relative file path: {relative_path}")
     root = game_dir.resolve()
-    path = game_dir / Path(*PurePosixPath(relative_path).parts)
+    path = game_dir / Path(*PurePosixPath(raw).parts)
     resolved = path.resolve()
     if resolved == root or root not in resolved.parents:
         raise CliError(f"Deployment path escapes game directory: {path}")

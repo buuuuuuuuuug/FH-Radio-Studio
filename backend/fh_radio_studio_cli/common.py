@@ -293,6 +293,9 @@ def package_root_dir(package_dir: Path, *, allow_missing: bool = False) -> Optio
 
 def load_manifest(path: Path) -> Dict[str, object]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as exc:
         die(f"Manifest parse failed: {path}: {exc}")
+    if not isinstance(document, dict):
+        die(f"Manifest must contain a JSON object: {path}")
+    return document
