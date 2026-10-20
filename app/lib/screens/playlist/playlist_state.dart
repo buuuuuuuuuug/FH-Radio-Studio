@@ -12,6 +12,9 @@ enum PlaylistMode { freeroam, event }
 
 @immutable
 class PlaylistState {
+  static final _poolIndexes = Expando<Map<String, PoolTrack>>(
+    'playlist pool index',
+  );
   const PlaylistState({
     required this.pool,
     required this.mode,
@@ -29,7 +32,7 @@ class PlaylistState {
     String playlistType,
     PlaylistPlan plan,
   ) {
-    final bySource = {
+    final bySource = _poolIndexes[this] ??= {
       for (final track in pool)
         PlaylistAssignment.keyForPath(track.source): track,
     };
@@ -40,7 +43,7 @@ class PlaylistState {
     )) {
       final track =
           bySource[assignment.trackKey] ??
-          _poolTrackForSource(pool, assignment.source);
+          bySource[PlaylistAssignment.keyForPath(assignment.source)];
       if (track == null) continue;
       out.add(
         track.copyWith(assignedTo: assignment.radioCode, slot: assignment.slot),
@@ -87,18 +90,18 @@ class PlaylistState {
     }
 
     final assignedTrackKeys = _assignedTrackKeys(plan);
-    final indexed = <({int index, PoolTrack track})>[
+    final indexed = [
       for (var index = 0; index < pool.length; index += 1)
-        (index: index, track: pool[index]),
+        (
+          index: index,
+          track: pool[index],
+          assigned: assignedTrackKeys.contains(
+            PlaylistAssignment.keyForPath(pool[index].source),
+          ),
+        ),
     ];
     indexed.sort((a, b) {
-      final aAssigned = assignedTrackKeys.contains(
-        PlaylistAssignment.keyForPath(a.track.source),
-      );
-      final bAssigned = assignedTrackKeys.contains(
-        PlaylistAssignment.keyForPath(b.track.source),
-      );
-      if (aAssigned != bAssigned) return aAssigned ? 1 : -1;
+      if (a.assigned != b.assigned) return a.assigned ? 1 : -1;
       final byCompleteness = _configurationCompleteness(
         b.track,
       ).compareTo(_configurationCompleteness(a.track));
@@ -139,17 +142,6 @@ Set<String> _assignedTrackKeys(PlaylistPlan plan) {
     }
   }
   return keys;
-}
-
-PoolTrack? _poolTrackForSource(List<PoolTrack> pool, String source) {
-  for (final item in pool) {
-    if (item.source == source ||
-        PlaylistAssignment.keyForPath(item.source) ==
-            PlaylistAssignment.keyForPath(source)) {
-      return item;
-    }
-  }
-  return null;
 }
 
 class PlaylistNotifier extends StateNotifier<PlaylistState> {
@@ -306,6 +298,8 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
     String radioCode,
     String playlistType, {
     required int maxSlots,
+    String? originRadioCode,
+    String? originPlaylistType,
   }) {
     if (_editingLocked) return false;
     final tracks = <PoolTrack>[];
@@ -354,8 +348,68 @@ class PlaylistNotifier extends StateNotifier<PlaylistState> {
       );
     }
     if (!state.splitPlaylistTypes) plan = plan.syncPlaylistTypesFrom(type);
+    for (final track in tracks) {
+      plan = _removeMoveOrigin(
+        plan: plan,
+        source: track.source,
+        targetRadioCode: radioCode,
+        targetPlaylistType: type,
+        originRadioCode: originRadioCode,
+        originPlaylistType: originPlaylistType,
+      );
+    }
     ref.read(playlistPlanProvider.notifier).replaceWith(plan);
     return true;
+  }
+
+  void reorderMany(
+    List<String> sources,
+    String beforeSource,
+    String radioCode,
+    String type,
+  ) {
+    if (_editingLocked ||
+        sources.any(
+          (s) =>
+              PlaylistAssignment.keyForPath(s) ==
+              PlaylistAssignment.keyForPath(beforeSource),
+        )) {
+      return;
+    }
+    var plan = _editablePlan();
+    for (final source in sources) {
+      plan = plan.moveBefore(
+        source: source,
+        beforeSource: beforeSource,
+        radioCode: radioCode,
+        playlistType: type,
+      );
+    }
+    if (!state.splitPlaylistTypes) plan = plan.syncPlaylistTypesFrom(type);
+    ref.read(playlistPlanProvider.notifier).replaceWith(plan);
+  }
+
+  void unassignMany(
+    List<String> ids, {
+    required String radioCode,
+    required String playlistType,
+  }) {
+    if (_editingLocked) return;
+    final tracks = [for (final id in ids) _trackById(id)];
+    if (tracks.any((t) => t == null)) return;
+    var plan = _editablePlan();
+    if (!state.splitPlaylistTypes) {
+      plan = plan.syncPlaylistTypesFrom(playlistType);
+    }
+    for (final track in tracks) {
+      plan = plan.unassign(
+        track!.source,
+        radioCode: radioCode,
+        playlistType: state.splitPlaylistTypes ? playlistType : null,
+        projectDir: ref.read(studioProvider).projectDir,
+      );
+    }
+    ref.read(playlistPlanProvider.notifier).replaceWith(plan);
   }
 
   PlaylistPlan _removeMoveOrigin({

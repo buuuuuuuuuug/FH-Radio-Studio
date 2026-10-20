@@ -2714,6 +2714,7 @@ class StudioController extends StateNotifier<StudioState> {
   }
 
   void setProjectDir(String value) {
+    if (!_allowProjectChange()) return;
     final next = value.trim().isEmpty
         ? FhRadioStudioProject.defaultProjectDir()
         : File(value.trim()).absolute.path;
@@ -2917,6 +2918,7 @@ class StudioController extends StateNotifier<StudioState> {
   }
 
   void updateRecentProjectPath(String oldPath, String newPath) {
+    if (!_allowProjectChange()) return;
     final next = newPath.trim().isEmpty
         ? FhRadioStudioProject.defaultProjectDir()
         : File(newPath.trim()).absolute.path;
@@ -2941,6 +2943,7 @@ class StudioController extends StateNotifier<StudioState> {
   }
 
   void removeRecentProject(String path) {
+    if (!_allowProjectChange()) return;
     final recentProjectDirs = state.recentProjectDirs
         .where((item) => !_sameProjectPath(item, path))
         .toList(growable: false);
@@ -2975,7 +2978,17 @@ class StudioController extends StateNotifier<StudioState> {
         _sameProjectPath(storedCurrent, path);
   }
 
+  bool _allowProjectChange() {
+    final blocked =
+        state.busy ||
+        state.fileIntegrityRefreshing ||
+        state.projectPathMigrationRunning;
+    if (blocked) _append('当前任务完成后才能更改项目或游戏目录。');
+    return !blocked;
+  }
+
   void setGameDir(String value) {
+    if (!_allowProjectChange()) return;
     _startupFullCheckStarted = false;
     state = state.copyWith(
       gameDir: value,
@@ -4291,10 +4304,6 @@ class StudioController extends StateNotifier<StudioState> {
     );
     var built = false;
     await _withBusy('构建电台包', () async {
-      _resetPackageDir(outDir);
-      _deletePackageDir(
-        FhRadioStudioProject.pendingPackageDir(state.projectDir),
-      );
       if (canBuildLanguageChange && musicInputs.isEmpty && !restoresBuiltin) {
         _append('播放列表草稿为空；将把当前 radio 原样准备进包，并加入语言设置。');
       }
@@ -4345,6 +4354,9 @@ class StudioController extends StateNotifier<StudioState> {
         '--progress-jsonl',
       ], stdinInput: usePlanStdin ? planForBuild.encodeForCli() : null);
       if (result.ok) {
+        _deletePackageDir(
+          FhRadioStudioProject.pendingPackageDir(state.projectDir),
+        );
         final packageDir = File(outDir).absolute.path;
         state = state.copyWith(
           lastPackageDir: packageDir,
@@ -4362,12 +4374,7 @@ class StudioController extends StateNotifier<StudioState> {
           _append('准备包已生成；但当前游戏文件还没确认，写入前仍需要先处理新文件记录。');
         }
       } else {
-        state = state.copyWith(
-          lastPackageDir: null,
-          lastPackageSummary: null,
-          pendingPackageDir: null,
-          pendingPackageSummary: null,
-        );
+        _append('本次构建失败，已保留上次成功的准备包。');
         await _refreshIntegrityFromCli();
       }
     });
@@ -4413,7 +4420,6 @@ class StudioController extends StateNotifier<StudioState> {
         return;
       }
       final outDir = FhRadioStudioProject.pendingPackageDir(state.projectDir);
-      _resetPackageDir(outDir);
       final timingManifest = TrackTimingStore.writeBuildManifest(
         projectDir: state.projectDir,
         musicInputs: musicInputs,
@@ -4455,6 +4461,8 @@ class StudioController extends StateNotifier<StudioState> {
         'only',
         '--playlist-from-package',
         state.lastPackageDir!,
+        '--reuse-package',
+        state.lastPackageDir!,
         if (timingManifest != null) ...['--timing-manifest', timingManifest],
         '--metadata-cache',
         TrackMetadataCache.configPath(state.projectDir),
@@ -4474,11 +4482,14 @@ class StudioController extends StateNotifier<StudioState> {
       } else {
         handled = false;
         final packageDir = File(outDir).absolute.path;
-        _deletePackageDir(outDir);
-        _writePendingPackageFailureMarker(packageDir, result);
+        final previous = _readPackageSummary(packageDir);
+        if (previous == null) {
+          _deletePackageDir(outDir);
+          _writePendingPackageFailureMarker(packageDir, result);
+        }
         state = state.copyWith(
           pendingPackageDir: packageDir,
-          pendingPackageSummary: null,
+          pendingPackageSummary: previous,
         );
         await _refreshIntegrityFromCli();
         _append(
@@ -4813,11 +4824,6 @@ class StudioController extends StateNotifier<StudioState> {
         state.fileIntegrity.level == GameFileIntegrityLevel.externalConflict ||
         state.fileIntegrity.level == GameFileIntegrityLevel.pendingVerify ||
         File(state.pendingBaselineManifest).existsSync();
-  }
-
-  void _resetPackageDir(String packageDir) {
-    _deletePackageDir(packageDir);
-    Directory(packageDir).createSync(recursive: true);
   }
 
   void _deletePackageDir(String packageDir) {

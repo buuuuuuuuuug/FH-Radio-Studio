@@ -48,8 +48,8 @@ class LayoutOptions {
     final rows = heightMode == RadioHeightMode.oneRow
         ? 1
         : math.max(1, (stations / columns).ceil());
-    // Keep headers usable in unusually short windows, then allow vertical scrolling.
-    return math.max(104.0, (viewport - gap * (rows - 1)) / rows);
+    // Keep one song visible below the header; scroll when all stations cannot fit.
+    return math.max(180.0, (viewport - gap * (rows - 1)) / rows);
   }
 
   LayoutOptions copyWith({

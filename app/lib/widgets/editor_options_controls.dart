@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import '../state/router.dart';
+import '../state/playlist_catalog_state.dart';
+import 'timing_dialog_frame.dart';
+import 'rm_button.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/editor_options.dart';
 import '../theme/app_theme.dart';
@@ -90,27 +95,61 @@ class EditorOptionsControls extends ConsumerWidget {
                   (v) => controller.update(manualOnly: v),
                 );
             final expansion = option(
-              '电台扩容',
+              '电台扩容 · 实验功能',
               '允许超过原版曲目数量',
               options.expansionEnabled,
               (v) {
                 if (!controller.update(expansionEnabled: v)) {
                   showDialog<void>(
                     context: context,
-                    builder: (dialogContext) => AlertDialog(
-                      backgroundColor: rm.panel,
-                      title: Text(
-                        '暂时不能关闭电台扩容',
-                        style: RmText.sans(16, color: rm.fg),
-                      ),
-                      content: Text(
-                        '请先把以下电台减少到原版容量以内：\n\n${controller.expansionOverflow().join("\n")}\n\n现有歌曲与顺序不会自动删除。',
-                        style: RmText.sans(12, color: rm.fg2),
+                    builder: (dialogContext) => TimingDialogFrame(
+                      title: '暂时不能关闭电台扩容',
+                      busy: false,
+                      width: 500,
+                      body: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '请先将以下电台减少到原版容量以内：',
+                            style: RmText.sans(12, color: rm.fg2),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: rm.warnBg,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: rm.warn.withAlpha(100)),
+                            ),
+                            child: Text(
+                              controller.expansionOverflow().join('\n'),
+                              style: RmText.mono(12, color: rm.warn),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            '现有歌曲与顺序不会自动删除。',
+                            style: RmText.sans(11.5, color: rm.fg3),
+                          ),
+                        ],
                       ),
                       actions: [
-                        TextButton(
+                        RmButton(
+                          label: '知道了',
                           onPressed: () => Navigator.pop(dialogContext),
-                          child: const Text('知道了'),
+                        ),
+                        RmButton(
+                          label: '前往播放列表',
+                          variant: RmButtonVariant.primary,
+                          onPressed: () {
+                            Navigator.pop(dialogContext);
+                            ref
+                                    .read(playlistCatalogViewProvider.notifier)
+                                    .state =
+                                PlaylistCatalogView.package;
+                            context.go(RmRoutes.playlist);
+                          },
                         ),
                       ],
                     ),

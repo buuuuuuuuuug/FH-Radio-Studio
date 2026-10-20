@@ -2730,6 +2730,7 @@ _writeIntegrityFixture(
       "relative_path": "RadioInfo_CN.xml",
       "source_game_path": "${_jsonPath(gameXml.path)}",
       "backup_path": "${_jsonPath(baselineXml.path)}",
+      "install_relative_path": "media/audio/RadioInfo_CN.xml",
       "size": ${baselineXml.lengthSync()},
       "md5": "${_md5(baselineXml)}"
     }

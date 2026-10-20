@@ -130,12 +130,9 @@ void main() {
       await t.tap(find.byKey(const ValueKey('waveform-toggle-节拍')));
       await t.pumpAndSettle();
       expect(painter().beats, isEmpty);
-      await t.tap(find.byKey(const ValueKey('waveform-toggle-段落')));
-      await t.pumpAndSettle();
+      expect(find.byKey(const ValueKey('waveform-toggle-段落')), findsNothing);
+
       expect(painter().segments, isEmpty);
-      await t.tap(find.byKey(const ValueKey('waveform-toggle-段落')));
-      await t.pumpAndSettle();
-      expect(painter().segments, state.ai.segments);
       expect(t.takeException(), isNull);
     },
   );

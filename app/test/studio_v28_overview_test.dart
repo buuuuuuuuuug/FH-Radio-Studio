@@ -17,7 +17,7 @@ import 'studio_v21_workflow_test.dart' as helpers;
 void main() {
   setUp(() => GoogleFonts.config.allowRuntimeFetching = false);
   testWidgets(
-    'refinement overview tracks zoom, panning and playback without moving markers',
+    'refinement overview tracks zoom and panning independently from main playback',
     (t) async {
       t.view.physicalSize = const Size(1600, 1100);
       t.view.devicePixelRatio = 1;
@@ -84,8 +84,8 @@ void main() {
       n.setPlaying(true);
       n.setPlayhead(0);
       await t.pumpAndSettle();
-      expect(strip().windowEnd, lessThan(end));
-      expect(strip().windowStart, 0);
+      expect(strip().windowEnd, end);
+      expect(strip().windowStart, closeTo(strip().duration - span, 1e-6));
       check();
       n.setPlaying(false);
       await t.pumpAndSettle();

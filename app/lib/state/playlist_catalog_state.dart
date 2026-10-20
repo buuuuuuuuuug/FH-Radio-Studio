@@ -112,6 +112,24 @@ class PlaylistCatalog {
     return primary[radio] ?? fallback[radio] ?? const <TrackRef>[];
   }
 
+  bool hasExpandedBank(String radioCode, PlaylistCatalog? baseline) {
+    final radio = canonicalRadioCode(radioCode);
+    final originalSlots =
+        baseline?.radios
+            .firstWhereOrNull((station) => station.code == radio)
+            ?.slot ??
+        0;
+    if (originalSlots <= 0) return false;
+    // Both scenes share one track bank; two individually short lists can still
+    // require expansion when they contain different songs.
+    final sounds = {
+      for (final type in const ['FreeRoam', 'Event'])
+        for (final track in tracksOfRadio(radio, type))
+          track.soundName ?? track.id,
+    };
+    return sounds.length > originalSlots;
+  }
+
   String? sourceForTrack(TrackRef track) {
     final sound = track.soundName?.trim();
     if (sound == null || sound.isEmpty) return null;
@@ -191,6 +209,7 @@ final playlistCatalogForViewProvider =
             sourceLang: state.sourceLang,
             targetLang: state.targetLang,
             bankSlotOptions: state.radioOptions,
+            integrity: state.fileIntegrity,
           ),
         ),
       );

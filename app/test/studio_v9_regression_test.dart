@@ -17,8 +17,8 @@ void main() {
       c.setHeightMode(RadioHeightMode.allStations);
       c.setWidth(-1);
       expect(c.state.heightFor(720, 9, 3), 232);
-      expect(c.state.heightFor(720, 9, 2), 134.4);
-      expect(c.state.heightFor(100, 9, 2), 104);
+      expect(c.state.heightFor(720, 9, 2), 180);
+      expect(c.state.heightFor(100, 9, 2), 180);
       c.setHeightMode(RadioHeightMode.oneRow);
       expect(c.state.heightFor(720, 9, 3), 720);
       c.setRadioColumns(6);

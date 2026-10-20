@@ -1,3 +1,5 @@
+import 'package:fh_radio_studio/core/playlist_capacity.dart';
+import 'package:fh_radio_studio/state/playlist_capacity.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,7 +28,9 @@ import 'package:fh_radio_studio/theme/app_theme.dart';
 import 'package:fh_radio_studio/theme/accents.dart';
 import 'playlist_double_edit_test.dart' as routing;
 
-Future<ProviderContainer> fixture() async {
+Future<ProviderContainer> fixture({
+  Map<String, Map<String, int>>? capacityLimits,
+}) async {
   final dir = Directory.systemTemp.createTempSync('studio-v18-');
   addTearDown(() => dir.deleteSync(recursive: true));
   FhRadioStudioProject.ensure(dir.path);
@@ -49,6 +53,10 @@ Future<ProviderContainer> fixture() async {
   );
   final container = ProviderContainer(
     overrides: [
+      if (capacityLimits != null)
+        playlistCapacityPolicyProvider.overrideWithValue(
+          PlaylistCapacityPolicy(capacityLimits),
+        ),
       sharedPreferencesProvider.overrideWithValue(prefs),
       studioProvider.overrideWith((ref) => _FixtureController(prefs)),
       realPoolTracksProvider.overrideWithValue(kCustomPool),

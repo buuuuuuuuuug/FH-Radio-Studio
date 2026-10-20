@@ -53,9 +53,20 @@ class SirenImportQueueState {
 }
 
 class SirenImportQueueController extends StateNotifier<SirenImportQueueState> {
-  SirenImportQueueController(this._ref) : super(SirenImportQueueState.empty);
+  SirenImportQueueController(this._ref) : super(SirenImportQueueState.empty) {
+    _ref.listen<String>(studioProvider.select((state) => state.projectDir), (
+      _,
+      _,
+    ) {
+      _generation++;
+      state = SirenImportQueueState.empty;
+    });
+  }
 
   final Ref _ref;
+  int _generation = 0;
+
+  bool _isCurrent(int generation) => mounted && generation == _generation;
 
   void queue(Iterable<String> cids, {Set<String> importedCids = const {}}) {
     final next = {...state.queuedCids};
@@ -147,6 +158,7 @@ class SirenImportQueueController extends StateNotifier<SirenImportQueueState> {
         )
         .toList(growable: false);
     if (batch.isEmpty) return;
+    final generation = ++_generation;
 
     state = SirenImportQueueState(
       queuedCids: state.queuedCids,
@@ -165,6 +177,7 @@ class SirenImportQueueController extends StateNotifier<SirenImportQueueState> {
 
     try {
       for (final track in batch) {
+        if (!_isCurrent(generation)) return;
         if (!state.queuedCids.contains(track.cid) ||
             state.importedPreviewCids.contains(track.cid)) {
           _markImportComplete(track.cid);
@@ -174,42 +187,47 @@ class SirenImportQueueController extends StateNotifier<SirenImportQueueState> {
           _recordTrackError(track.cid, '当前正在导入其它音源，塞壬导入已暂停。');
           break;
         }
-        await _importTrack(track);
+        await _importTrack(track, generation);
       }
     } finally {
-      final batchCids = batch.map((track) => track.cid).toSet();
-      final batchErrors = <String, String>{};
-      for (final cid in batchCids) {
-        final error = state.trackErrors[cid];
-        if (error != null) batchErrors[cid] = error;
+      if (_isCurrent(generation)) {
+        final batchCids = batch.map((track) => track.cid).toSet();
+        final batchErrors = <String, String>{};
+        for (final cid in batchCids) {
+          final error = state.trackErrors[cid];
+          if (error != null) batchErrors[cid] = error;
+        }
+        state = SirenImportQueueState(
+          queuedCids: state.queuedCids,
+          importedPreviewCids: state.importedPreviewCids,
+          importingCids: {...state.importingCids}
+            ..removeWhere(batchCids.contains),
+          trackErrors: state.trackErrors,
+          lastBatchErrors: batchErrors,
+          batchTotal: 0,
+          lastBatchTotal: batch.length,
+          importing: false,
+        );
       }
-      state = SirenImportQueueState(
-        queuedCids: state.queuedCids,
-        importedPreviewCids: state.importedPreviewCids,
-        importingCids: {...state.importingCids}
-          ..removeWhere(batchCids.contains),
-        trackErrors: state.trackErrors,
-        lastBatchErrors: batchErrors,
-        batchTotal: 0,
-        lastBatchTotal: batch.length,
-        importing: false,
-      );
     }
   }
 
-  Future<void> _importTrack(SirenTrack track) async {
+  Future<void> _importTrack(SirenTrack track, int generation) async {
     try {
       final detail = await _ref
           .read(sirenCatalogClientProvider)
           .fetchSongDetail(track.cid);
+      if (!_isCurrent(generation)) return;
       final cache = _ref.read(sirenAudioCacheProvider);
       final cached = await cache.cacheAudio(detail, track: track);
+      if (!_isCurrent(generation)) return;
       String? coverImagePath;
       try {
         coverImagePath = (await cache.cacheCover(track))?.path;
       } on Object {
         coverImagePath = null;
       }
+      if (!_isCurrent(generation)) return;
       final imported = await _ref
           .read(studioProvider.notifier)
           .importSirenTrack(
@@ -218,15 +236,16 @@ class SirenImportQueueController extends StateNotifier<SirenImportQueueState> {
             cachedAudioPath: cached.path,
             coverImagePath: coverImagePath,
           );
+      if (!_isCurrent(generation)) return;
       if (imported != null) {
         markImported(track.cid);
       } else {
         _recordTrackError(track.cid, '塞壬导入没有生成项目音频。');
       }
     } on Object catch (error) {
-      _recordTrackError(track.cid, '$error');
+      if (_isCurrent(generation)) _recordTrackError(track.cid, '$error');
     } finally {
-      _markImportComplete(track.cid);
+      if (_isCurrent(generation)) _markImportComplete(track.cid);
     }
   }
 

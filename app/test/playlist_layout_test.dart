@@ -18,6 +18,33 @@ import 'package:fh_radio_studio/theme/app_theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('auto height keeps songs visible in a short narrow window', (
+    tester,
+  ) async {
+    await _pumpPlaylist(tester, const Size(840, 820));
+    final scope = ProviderScope.containerOf(
+      tester.element(find.byType(PlaylistScreen)),
+    );
+    final options = scope.read(layoutOptionsProvider.notifier);
+    options.setRadioColumns(2);
+    options.setHeightMode(RadioHeightMode.allStations);
+    await tester.pump();
+    final station = find.byKey(const ValueKey('playlist-radio-column-R1'));
+    final songs = find.descendant(of: station, matching: find.byType(ListView));
+    expect(tester.getSize(songs).height, greaterThanOrEqualTo(60));
+    final board = tester.widget<GridView>(
+      find.byKey(const ValueKey('playlist-radio-board')),
+    );
+    expect(board.controller!.position.maxScrollExtent, greaterThan(0));
+    board.controller!.jumpTo(board.controller!.position.maxScrollExtent);
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('playlist-radio-column-R9')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('very narrow board stacks pool without violating station width', (
     tester,
   ) async {

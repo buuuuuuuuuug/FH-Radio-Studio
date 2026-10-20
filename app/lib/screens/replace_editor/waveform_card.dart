@@ -43,7 +43,6 @@ class WaveformCard extends StatefulWidget {
 class _WaveformCardState extends State<WaveformCard> {
   bool _showWaveform = true;
   bool _showBeats = true;
-  bool _showSegments = true;
   ReplaceEditorState get state => widget.state;
   bool get compact => widget.compact;
   bool get aiPending => widget.aiPending;
@@ -51,13 +50,12 @@ class _WaveformCardState extends State<WaveformCard> {
   VoidCallback get onZoomIn => widget.onZoomIn;
   VoidCallback get onZoomOut => widget.onZoomOut;
   ValueChanged<double>? get onWheelZoom => widget.onWheelZoom;
-  List<Segment> get _segments => _showSegments ? state.ai.segments : const [];
 
   @override
   void didUpdateWidget(covariant WaveformCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.state.trackId != state.trackId) {
-      _showWaveform = _showBeats = _showSegments = true;
+      _showWaveform = _showBeats = true;
     }
   }
 
@@ -118,8 +116,8 @@ class _WaveformCardState extends State<WaveformCard> {
               ai.waveformPeaks.isEmpty &&
               state.error == null),
       overlayKey: const ValueKey('editor-ai-pending-waveform'),
-      label: aiPending ? '波形与结构分析中' : '正在读取波形',
-      detail: aiPending ? '等待真实波形、节拍、段落和 marker。' : '首次生成后自动缓存，再次打开直接读取。',
+      label: aiPending ? '波形分析中' : '正在读取波形',
+      detail: aiPending ? '等待真实波形、节拍和时间点。' : '首次生成后自动缓存，再次打开直接读取。',
       blockInput: false,
       childOpacity: 0.42,
       child: card,
@@ -148,11 +146,6 @@ class _WaveformCardState extends State<WaveformCard> {
                   '节拍',
                   _showBeats,
                   () => setState(() => _showBeats = !_showBeats),
-                ),
-                (
-                  '段落',
-                  _showSegments,
-                  () => setState(() => _showSegments = !_showSegments),
                 ),
               ]),
             ],
@@ -215,8 +208,6 @@ class _WaveformCardState extends State<WaveformCard> {
             Tooltip(
               message: i.$1 == '节拍' && state.ai.beats.isEmpty
                   ? '暂无检测节拍；可运行节拍分析后查看'
-                  : i.$1 == '段落' && state.ai.segments.isEmpty
-                  ? '暂无段落分析数据'
                   : '显示 / 隐藏${i.$1}',
               child: InkWell(
                 key: ValueKey('waveform-toggle-${i.$1}'),
@@ -254,13 +245,21 @@ class _WaveformCardState extends State<WaveformCard> {
       builder: (context, c) {
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
+          onHorizontalDragStart: (d) {
+            final pct = (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0);
+            onSeek(state.zoomStart + pct * (state.zoomEnd - state.zoomStart));
+          },
+          onHorizontalDragUpdate: (d) {
+            final pct = (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0);
+            onSeek(state.zoomStart + pct * (state.zoomEnd - state.zoomStart));
+          },
           onTapDown: (d) {
             final pct = (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0);
             onSeek(state.zoomStart + pct * (state.zoomEnd - state.zoomStart));
           },
           child: SizedBox(
             height: WaveformPainter.heightForWindow(
-              _segments,
+              const [],
               state.zoomStart,
               state.zoomEnd,
             ),
@@ -270,7 +269,7 @@ class _WaveformCardState extends State<WaveformCard> {
                 rm: rm,
                 bars: bars,
                 beats: _showBeats ? ai.beats : const [],
-                segments: _segments,
+                segments: const [],
                 showWaveform: _showWaveform,
                 duration: ai.durationSec,
                 markers: markers,

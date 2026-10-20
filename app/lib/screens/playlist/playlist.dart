@@ -1,3 +1,8 @@
+import 'playlist_draggable.dart';
+import 'playlist_drag_preview.dart';
+import '../../widgets/open_package_folder_button.dart';
+import '../../core/playlist_capacity.dart';
+import '../../core/playlist_action_errors.dart';
 import '../../widgets/quick_assign_dialog.dart';
 import '../../core/track_timing_config.dart';
 import '../../state/editor_navigation.dart';
@@ -7,6 +12,7 @@ import 'package:go_router/go_router.dart';
 import '../../state/router.dart';
 import '../../state/editor_options.dart';
 import 'dart:async';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
@@ -52,7 +58,6 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   final _boardScroll = ScrollController();
   Timer? _rowSnapTimer;
   double _rowExtent = 0;
-  bool _snapping = false;
   bool _snapOnScroll(ScrollNotification notification) {
     if (notification.depth != 0) return false;
     if (notification is ScrollStartNotification ||
@@ -62,12 +67,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       return false;
     }
     if (notification is! ScrollEndNotification ||
-        _snapping ||
         ref.read(layoutOptionsProvider).heightMode != RadioHeightMode.oneRow) {
       return false;
     }
     _rowSnapTimer?.cancel();
-    _rowSnapTimer = Timer(const Duration(milliseconds: 700), () async {
+    _rowSnapTimer = Timer(const Duration(milliseconds: 450), () async {
       if (!mounted ||
           !_boardScroll.hasClients ||
           _boardScroll.position.isScrollingNotifier.value ||
@@ -79,18 +83,96 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       final target = (_boardScroll.offset / _rowExtent).round() * _rowExtent;
       final offset = target.clamp(0.0, _boardScroll.position.maxScrollExtent);
       if ((offset - _boardScroll.offset).abs() < 1) return;
-      _snapping = true;
-      try {
-        await _boardScroll.animateTo(
-          offset,
-          duration: const Duration(milliseconds: 190),
-          curve: Curves.easeOutCubic,
-        );
-      } finally {
-        _snapping = false;
-      }
+      await _boardScroll.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 190),
+        curve: Curves.easeOutCubic,
+      );
     });
     return false;
+  }
+
+  void _restorePlaylistHistory({required bool redo}) {
+    final history = ref.read(playlistPlanProvider.notifier);
+    try {
+      if (redo) {
+        history.redo();
+      } else {
+        history.undo();
+      }
+    } on PlaylistCapacityException catch (error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString()),
+          duration: const Duration(seconds: 7),
+        ),
+      );
+    }
+  }
+
+  void _savePlaylist() {
+    final cli = ref.read(studioProvider);
+    if (cli.busy ||
+        cli.projectEditingLocked ||
+        ref.read(playlistCatalogViewProvider) != PlaylistCatalogView.package) {
+      return;
+    }
+    try {
+      ref.read(playlistPlanProvider.notifier).save();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('歌曲分配与顺序已保存，无需构建准备包。')));
+    } on Object catch (error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(playlistActionFailure('保存播放列表', error)),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
+  }
+
+  KeyEventResult _onPlaylistKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || ModalRoute.of(context)?.isCurrent == false) {
+      return KeyEventResult.ignored;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        (_selecting || _selection.ids.isNotEmpty)) {
+      setState(() {
+        _selecting = false;
+        _selection = SongSelection();
+      });
+      return KeyEventResult.handled;
+    }
+    final typing =
+        FocusManager.instance.primaryFocus?.context
+            ?.findAncestorStateOfType<EditableTextState>() !=
+        null;
+    if (!keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyS &&
+        !keyboard.isShiftPressed) {
+      _savePlaylist();
+      return KeyEventResult.handled;
+    }
+    if (typing ||
+        ref.read(playlistCatalogViewProvider) != PlaylistCatalogView.package) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+      _restorePlaylistHistory(redo: keyboard.isShiftPressed);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyY &&
+        !keyboard.isShiftPressed) {
+      _restorePlaylistHistory(redo: true);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   Object? _radioWidgetInputs,
@@ -124,21 +206,29 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
   set _selection(SongSelection value) => _selectionSignal.value = value;
   bool _selecting = false;
   String _selectionProject = '';
+  String _selectionScope = 'pool';
+  void _toggleSelection(String scope) {
+    setState(() {
+      _selecting = !_selecting || _selectionScope != scope;
+      _selectionScope = scope;
+      _selection = SongSelection();
+    });
+  }
+
   void _selectPoolTrack(
     PoolTrack track,
     List<PoolTrack> visible, {
     bool control = false,
     bool range = false,
+    String scope = 'pool',
   }) {
     if (!_selecting && !control && !range) return;
-    final selection = _selection.click(
-      track.id,
-      visible.map((t) => t.id).toList(),
-      range: range,
-    );
+    final selection = (_selectionScope == scope ? _selection : SongSelection())
+        .click(track.id, visible.map((t) => t.id).toList(), range: range);
     if (!_selecting) {
       setState(() => _selecting = true);
     }
+    _selectionScope = scope;
     _selection = selection;
   }
 
@@ -260,14 +350,23 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         isCustom) {
       ref
           .read(playlistProvider.notifier)
-          .reorder(data.track.source, '', radio.code, playlistType);
+          .reorderMany(
+            data.tracks.map((t) => t.source).toList(),
+            '',
+            radio.code,
+            playlistType,
+          );
       return;
     }
+    final project = ref.read(studioProvider).projectDir;
     bool assignTrack() {
+      if (!mounted || ref.read(studioProvider).projectDir != project) {
+        return false;
+      }
       final assigned = ref
           .read(playlistProvider.notifier)
-          .assignToRadio(
-            data.track.id,
+          .assignManyToRadio(
+            data.tracks.map((t) => t.id).toList(),
             radio.code,
             playlistType,
             maxSlots: maxSlots,
@@ -276,9 +375,14 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           );
       if (!assigned && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${radio.name} 已达到 $maxSlots 首上限。')),
+          SnackBar(
+            content: Text(
+              '${radio.name} 容量不足（上限 $maxSlots 首），整批 ${data.tracks.length} 首均未移动。',
+            ),
+          ),
         );
       }
+      if (assigned) _selection = SongSelection();
       return assigned;
     }
 
@@ -287,6 +391,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         context,
         radio: radio,
         track: data.track,
+        trackCount: data.tracks.length,
         originalTracks: originalTracks,
         onConfirm: assignTrack,
       );
@@ -323,8 +428,9 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     final originType = data.originPlaylistType;
     if (originRadio == null || originType == null) return;
 
+    plan = editableAssignmentPlan(ref);
     final assignments = plan.assignmentsForRadio(originRadio, originType);
-    if (assignments.length <= 1) {
+    if (assignments.length <= data.tracks.length) {
       final radio = _radioByCode(catalog, originRadio);
       if (radio == null) return;
       final assignedTracks = s.tracksOfRadio(originRadio, originType, plan);
@@ -334,11 +440,12 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
 
     ref
         .read(playlistProvider.notifier)
-        .unassign(
-          data.track.id,
+        .unassignMany(
+          data.tracks.map((t) => t.id).toList(),
           radioCode: originRadio,
           playlistType: originType,
         );
+    _selection = SongSelection();
   }
 
   RadioStation? _radioByCode(PlaylistCatalog catalog, String code) {
@@ -642,15 +749,95 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       );
       return;
     }
-    final copied = ref.read(playlistProvider.notifier).copyGameLayout(catalog);
-    ref.read(playlistCatalogViewProvider.notifier).state =
-        PlaylistCatalogView.package;
-    messenger.showSnackBar(
-      SnackBar(content: Text('已复制当前游戏内排布：$copied 首自建曲目。')),
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: RmTokens.modalBackdrop,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: context.rm.panel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(RmTokens.rLg),
+          side: BorderSide(color: context.rm.border),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '复制游戏内排布？',
+                  style: RmText.sans(
+                    18,
+                    weight: FontWeight.w600,
+                    color: context.rm.fg,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '这会替换准备包中当前的歌曲分配与顺序，包括尚未保存的修改。歌曲和时间点不会删除；复制后可撤销。',
+                  style: RmText.body(color: context.rm.fg2),
+                ),
+                const SizedBox(height: 20),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    RmButton(
+                      label: '取消',
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                    ),
+                    RmButton(
+                      key: const ValueKey('confirm-copy-game-layout'),
+                      label: '确认替换',
+                      variant: RmButtonVariant.primary,
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
+    if (!mounted || confirmed != true) return;
+    try {
+      final copied = ref
+          .read(playlistProvider.notifier)
+          .copyGameLayout(catalog);
+      ref.read(playlistCatalogViewProvider.notifier).state =
+          PlaylistCatalogView.package;
+      messenger.showSnackBar(
+        SnackBar(content: Text('已复制当前游戏内排布：$copied 首自建曲目。')),
+      );
+    } on Object catch (error) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(playlistActionFailure('复制游戏内排布', error)),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
   }
 
   Future<void> _preparePackageFromUi(BuildContext context) async {
+    try {
+      await _preparePackage(context);
+    } on Object catch (error) {
+      if (!mounted || !context.mounted) return;
+      await showPackageBuildNoticeDialog(
+        context,
+        message: playlistActionFailure('构建准备包', error),
+        languageChanged: false,
+        showPlaylistAction: false,
+      );
+    }
+  }
+
+  Future<void> _preparePackage(BuildContext context) async {
     final plan = editableAssignmentPlan(ref);
     final timings = ref.read(trackTimingProvider);
     final pool = ref.read(playlistProvider).pool;
@@ -829,7 +1016,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       _selection = SongSelection();
       _selecting = false;
     }
-    _selection.ids.removeWhere((id) => !s.pool.any((t) => t.id == id));
+    final poolIds = s.pool.map((t) => t.id).toSet();
+    _selection.ids.removeWhere((id) => !poolIds.contains(id));
 
     if (_search.text != s.search) {
       _search.value = TextEditingValue(
@@ -857,60 +1045,64 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     }
     final pool = _cachedDisplayPool;
 
-    return ContainedScroll(
-      controller: _boardScroll,
-      child: Center(
-        child: Consumer(
-          builder: (context, layoutRef, child) => ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: layoutRef.watch(
-                layoutOptionsProvider.select(
-                  (o) => o.pageWidth(_playlistPageMaxWidth),
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _onPlaylistKey,
+      child: ContainedScroll(
+        controller: _boardScroll,
+        child: Center(
+          child: Consumer(
+            builder: (context, layoutRef, child) => ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: layoutRef.watch(
+                  layoutOptionsProvider.select(
+                    (o) => o.pageWidth(_playlistPageMaxWidth),
+                  ),
                 ),
               ),
+              child: child,
             ),
-            child: child,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(40, 24, 40, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _pageHead(context, cli, view),
-                if (cli.projectEditingLocked) ...[
-                  const SizedBox(height: 12),
-                  RmBanner(
-                    kind: RmBannerKind.warn,
-                    title: cli.projectEditingLockTitle,
-                    body:
-                        '${cli.projectEditingLockMessage} 播放列表拖拽、恢复、复制和写包暂时不可用。',
-                  ),
-                ],
-                const SizedBox(height: 18),
-                if (catalog.failed)
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: _catalogError(context, catalog, cli, view),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(40, 24, 40, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _pageHead(context, cli, view),
+                  if (cli.projectEditingLocked) ...[
+                    const SizedBox(height: 12),
+                    RmBanner(
+                      kind: RmBannerKind.warn,
+                      title: cli.projectEditingLockTitle,
+                      body:
+                          '${cli.projectEditingLockMessage} 播放列表拖拽、恢复、复制和写包暂时不可用。',
                     ),
-                  )
-                else ...[
-                  _toolbar(context, s, catalog, view, editingPlan, cli),
+                  ],
                   const SizedBox(height: 18),
-                  Expanded(
-                    child: _board(
-                      context,
-                      s,
-                      pool,
-                      catalog,
-                      baselineCatalog,
-                      editingPlan,
-                      editingPlan,
-                      view,
-                      cli,
+                  if (catalog.failed)
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: _catalogError(context, catalog, cli, view),
+                      ),
+                    )
+                  else ...[
+                    _toolbar(context, s, catalog, view, editingPlan, cli),
+                    const SizedBox(height: 18),
+                    Expanded(
+                      child: _board(
+                        context,
+                        s,
+                        pool,
+                        catalog,
+                        baselineCatalog,
+                        editingPlan,
+                        editingPlan,
+                        view,
+                        cli,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -954,6 +1146,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       spacing: 8,
       runSpacing: 8,
       children: [
+        OpenPackageFolderButton(path: cli.lastPackageDeployDir),
         RmButton(
           label: ref.watch(playlistPlanProvider.notifier).dirty
               ? '保存播放列表 *'
@@ -961,12 +1154,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           leading: const RmIcon('check', size: 12),
           onPressed: cli.busy || cli.projectEditingLocked
               ? null
-              : () {
-                  ref.read(playlistPlanProvider.notifier).save();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('歌曲分配与顺序已保存，无需构建准备包。')),
-                  );
-                },
+              : _savePlaylist,
         ),
         RmButton(
           onPressed: cli.busy || cli.projectEditingLocked
@@ -1155,7 +1343,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                           editingLocked ||
                               !ref.read(playlistPlanProvider.notifier).canUndo
                           ? null
-                          : ref.read(playlistPlanProvider.notifier).undo,
+                          : () => _restorePlaylistHistory(redo: false),
                     ),
                     RmButton(
                       key: const ValueKey('playlist-redo'),
@@ -1166,12 +1354,13 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                           editingLocked ||
                               !ref.read(playlistPlanProvider.notifier).canRedo
                           ? null
-                          : ref.read(playlistPlanProvider.notifier).redo,
+                          : () => _restorePlaylistHistory(redo: true),
                     ),
                   ],
                   splitSwitch,
                   if (s.splitPlaylistTypes) segmented,
-                  Text('双击自建曲目进入编辑', style: RmText.sans(11.5, color: rm.fg3)),
+                  if (view == PlaylistCatalogView.package)
+                    Text('双击自建曲目进入编辑', style: RmText.sans(11.5, color: rm.fg3)),
                 ],
               ),
               const SizedBox(height: 10),
@@ -1365,6 +1554,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       plan,
       view,
       cli.projectEditingLocked,
+      _selecting,
       ref.watch(editorOptionsProvider).expansionEnabled,
       ref.read(playlistPlanProvider.notifier).hasUserPlan,
       context.rm,
@@ -1492,7 +1682,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         .where((t) => _matchesRef(s, t))
         .toList();
     final originalTrackCount = originalTrackRefs.length;
-    final count = isCustom && (customTracks.isNotEmpty || draftCustom)
+    final count =
+        !readOnly && isCustom && (customTracks.isNotEmpty || draftCustom)
         ? customTracks.length
         : originalTrackCount;
     final expansion = ref.watch(editorOptionsProvider).expansionEnabled;
@@ -1501,7 +1692,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     final replaceableCapacity = expansion
         ? 4096
         : (originalCapacity > 0 ? originalCapacity : r.slot);
-    final capacity = isCustom ? replaceableCapacity : originalTrackCount;
+    final capacity = readOnly
+        ? originalTrackCount
+        : isCustom
+        ? replaceableCapacity
+        : originalTrackCount;
 
     final bySource = {
       for (final t in s.pool) PlaylistAssignment.keyForPath(t.source): t,
@@ -1525,8 +1720,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 details.data.originPlaylistType == playlistType,
             onAcceptWithDetails: (details) => ref
                 .read(playlistProvider.notifier)
-                .reorder(
-                  details.data.track.source,
+                .reorderMany(
+                  details.data.tracks.map((t) => t.source).toList(),
                   t.source,
                   r.code,
                   playlistType,
@@ -1548,7 +1743,15 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 originPlaylistType: playlistType,
                 locked: editingLocked,
                 order: customTracks.indexOf(t) + 1,
-                editorSequence: assignedTracks,
+                editorSequence: customTracks,
+                selectionMode: _selecting,
+                onSelect: (control, shift) => _selectPoolTrack(
+                  t,
+                  assignedTracks,
+                  control: control,
+                  range: shift,
+                  scope: '${r.code}|$playlistType',
+                ),
               ),
             ),
           );
@@ -1565,7 +1768,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           durationSec: t.durationSec,
           locked: !isCustom || readOnly,
           custom: isCustom ? (t.modded || readOnly) : t.modded,
-          onOpenEditor: editingLocked
+          onOpenEditor: editingLocked || readOnly || !isCustom
               ? null
               : _catalogEditorAction(t, catalog, s.pool, originalTracks),
         );
@@ -1575,7 +1778,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         radio: r,
         isCustom: isCustom,
         count: count,
-        pendingCount: !isCustom
+        expanded: readOnly && catalog.hasExpandedBank(r.code, baselineCatalog),
+        pendingCount: readOnly || !isCustom
             ? 0
             : editableCustom
             ? customTracks.where((t) => !t.configured).length
@@ -1602,15 +1806,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     if (readOnly || editingLocked) return column;
 
     return DragTarget<_PlaylistDragData>(
-      onWillAcceptWithDetails: (details) {
-        return _canAcceptTrack(
-          details.data,
-          r,
-          plan,
-          playlistType,
-          replaceableCapacity,
-        );
-      },
+      onWillAcceptWithDetails: (_) => true,
       onAcceptWithDetails: (details) {
         _assign(
           details.data,
@@ -1629,40 +1825,6 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         );
       },
     );
-  }
-
-  bool _canAcceptTrack(
-    _PlaylistDragData data,
-    RadioStation radio,
-    PlaylistPlan plan,
-    String playlistType,
-    int maxSlots,
-  ) {
-    if (plan.assignmentFor(
-          source: data.track.source,
-          radioCode: radio.code,
-          playlistType: playlistType,
-        ) !=
-        null) {
-      return true;
-    }
-    final playlistState = ref.read(playlistProvider);
-    if (!playlistState.splitPlaylistTypes &&
-        plan.assignmentFor(
-              source: data.track.source,
-              radioCode: radio.code,
-              playlistType: _otherPlaylistType(playlistType),
-            ) !=
-            null) {
-      return true;
-    }
-    return plan.assignmentsForRadio(radio.code, playlistType).length < maxSlots;
-  }
-
-  String _otherPlaylistType(String playlistType) {
-    return PlaylistAssignment.normalizePlaylistType(playlistType) == 'Event'
-        ? 'FreeRoam'
-        : 'Event';
   }
 
   String _displayPlaylistType(
@@ -1732,15 +1894,22 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       filterControls: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const SizedBox(height: 2),
+          SongBrowseControls(
+            value: _browse,
+            compact: true,
+            showSearch: false,
+            onChanged: (v) => setState(() => _browse = v),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Row(
               children: [
                 Expanded(
                   child: Tooltip(
-                    message: 'Ctrl 多选 · Shift 连选 · 双击编辑',
+                    message: 'Ctrl 多选 · Shift 连选 · Esc 退出 · 双击编辑',
                     child: Text(
-                      'Ctrl 多选 · Shift 连选 · 双击编辑',
+                      'Ctrl 多选 · Shift 连选 · Esc 退出',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: RmText.sans(10, color: context.rm.fg3),
@@ -1753,13 +1922,12 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   child: RmButton(
                     key: const ValueKey('playlist-multiselect-toggle'),
                     size: RmButtonSize.md,
-                    label: _selecting ? '退出多选' : '多选',
+                    label: _selecting && _selectionScope == 'pool'
+                        ? '退出多选'
+                        : '多选',
                     onPressed: cli.projectEditingLocked
                         ? null
-                        : () => setState(() {
-                            _selecting = !_selecting;
-                            if (!_selecting) _selection = SongSelection();
-                          }),
+                        : () => _toggleSelection('pool'),
                   ),
                 ),
               ],
@@ -1768,47 +1936,55 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           if (_selecting)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
+              child: Row(
+                key: const ValueKey('playlist-selection-actions'),
                 children: [
-                  Text(
-                    '已选 ${_selection.ids.length}',
-                    style: RmText.sans(10.5, color: context.rm.fg3),
-                  ),
-                  RmButton(
-                    size: RmButtonSize.sm,
-                    label: '全选',
-                    onPressed: () => _selection = SongSelection(
-                      ids: pool.map((t) => t.id).toSet(),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          _selectionScope == 'pool'
+                              ? '已选 ${_selection.ids.length}'
+                              : '电台已选 ${_selection.ids.length}',
+                          style: RmText.sans(10.5, color: context.rm.fg3),
+                        ),
+                        RmButton(
+                          size: RmButtonSize.sm,
+                          label: '全选',
+                          onPressed: () {
+                            _selectionScope = 'pool';
+                            _selection = SongSelection(
+                              ids: pool.map((t) => t.id).toSet(),
+                            );
+                          },
+                        ),
+                        RmButton(
+                          size: RmButtonSize.sm,
+                          label: '清空',
+                          onPressed: () => _selection = SongSelection(),
+                        ),
+                      ],
                     ),
                   ),
-                  RmButton(
-                    size: RmButtonSize.sm,
-                    label: '清空',
-                    onPressed: () => _selection = SongSelection(),
-                  ),
+                  const SizedBox(width: 6),
                   RmButton(
                     key: const ValueKey('playlist-batch-assign'),
                     size: RmButtonSize.sm,
                     label: '分配到电台',
                     variant: RmButtonVariant.primary,
                     onPressed:
-                        _selection.ids.isEmpty || cli.projectEditingLocked
+                        _selectionScope != 'pool' ||
+                            _selection.ids.isEmpty ||
+                            cli.projectEditingLocked
                         ? null
                         : () => _assignSelected(pool),
                   ),
                 ],
               ),
             ),
-          const SizedBox(height: 2),
-          SongBrowseControls(
-            value: _browse,
-            compact: true,
-            showSearch: false,
-            onChanged: (v) => setState(() => _browse = v),
-          ),
         ],
       ),
       itemBuilder: (context, index) {
@@ -1966,45 +2142,53 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
         locked: true,
       );
     }
-    return Draggable<_PlaylistDragData>(
-      maxSimultaneousDrags: selectionMode ? 0 : 1,
-      data: _PlaylistDragData(
-        track: t,
-        originRadioCode: originRadioCode,
-        originPlaylistType: originPlaylistType,
-      ),
-      feedback: Material(
-        color: context.rm.panel,
-        elevation: 8,
-        borderRadius: BorderRadius.circular(RmTokens.rSm),
-        clipBehavior: Clip.antiAlias,
-        child: SizedBox(
-          width: 260,
+    return ValueListenableBuilder<SongSelection>(
+      valueListenable: _selectionSignal,
+      builder: (context, selection, _) {
+        final scope = originRadioCode == null
+            ? 'pool'
+            : '$originRadioCode|$originPlaylistType';
+        final isSelected =
+            _selectionScope == scope && selection.ids.contains(t.id);
+        final ordered = editorSequence ?? ref.read(playlistProvider).pool;
+        final orderedIds = ordered.map((t) => t.id).toSet();
+        final tracks = !isSelected
+            ? [t]
+            : [
+                for (final track in ordered)
+                  if (selection.ids.contains(track.id)) track,
+                for (final track in ref.read(playlistProvider).pool)
+                  if (selection.ids.contains(track.id) &&
+                      !orderedIds.contains(track.id))
+                    track,
+              ];
+        return PlaylistDraggable<_PlaylistDragData>(
+          maxSimultaneousDrags: 1,
+          data: _PlaylistDragData(
+            tracks: tracks,
+            originRadioCode: originRadioCode,
+            originPlaylistType: originPlaylistType,
+          ),
+          feedback: PlaylistDragPreview(tracks: tracks),
+          childWhenDragging: Opacity(
+            opacity: 0.35,
+            child: TrackCard.fromPoolTrack(
+              t,
+              order: order,
+              assignmentLabels: assignmentLabels,
+            ),
+          ),
           child: TrackCard.fromPoolTrack(
             t,
-            dragging: true,
+            onOpenEditor: () => _openTrackEditor(t, sequence: editorSequence),
+            onSelect: onSelect,
+            selected: isSelected,
+            selectionMode: selectionMode,
             order: order,
             assignmentLabels: assignmentLabels,
           ),
-        ),
-      ),
-      childWhenDragging: Opacity(
-        opacity: 0.35,
-        child: TrackCard.fromPoolTrack(
-          t,
-          order: order,
-          assignmentLabels: assignmentLabels,
-        ),
-      ),
-      child: TrackCard.fromPoolTrack(
-        t,
-        onOpenEditor: () => _openTrackEditor(t, sequence: editorSequence),
-        onSelect: onSelect,
-        selected: selected,
-        selectionMode: selectionMode,
-        order: order,
-        assignmentLabels: assignmentLabels,
-      ),
+        );
+      },
     );
   }
 }
@@ -2238,12 +2422,13 @@ class _PlaylistViewSwitch extends StatelessWidget {
 @immutable
 class _PlaylistDragData {
   const _PlaylistDragData({
-    required this.track,
+    required this.tracks,
     this.originRadioCode,
     this.originPlaylistType,
   });
 
-  final PoolTrack track;
+  final List<PoolTrack> tracks;
+  PoolTrack get track => tracks.first;
   final String? originRadioCode;
   final String? originPlaylistType;
 }

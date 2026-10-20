@@ -61,7 +61,23 @@ class AppShell extends ConsumerWidget {
                     ? Row(
                         children: [
                           Sidebar(activeId: activeId),
-                          Expanded(child: content),
+                          Expanded(
+                            child: Listener(
+                              key: const ValueKey('settings-main-content'),
+                              behavior: HitTestBehavior.translucent,
+                              onPointerDown: (_) {
+                                if (ref.read(settingsExpandedProvider)) {
+                                  ref
+                                          .read(
+                                            settingsExpandedProvider.notifier,
+                                          )
+                                          .state =
+                                      false;
+                                }
+                              },
+                              child: content,
+                            ),
+                          ),
                         ],
                       )
                     : Column(

@@ -1,3 +1,4 @@
+import 'package:fh_radio_studio/screens/replace_editor/transport_bar.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -406,7 +407,7 @@ void main() {
       final secondAi = container.read(replaceEditorProvider('cp-1')).ai.tl[1];
       await tester.tap(find.byKey(const ValueKey('manual-refine-ai-apply-1')));
       await tester.pump();
-      final previewState = container.read(replaceEditorProvider('cp-1'));
+      final previewState = _manualTransport(tester).state;
       final expectedAuditionStart = loopPreviewAuditionStartForTesting(
         startSec: secondAi.start,
         endSec: secondAi.end,
@@ -425,7 +426,7 @@ void main() {
       );
       await tester.pump();
 
-      final restartedPreview = container.read(replaceEditorProvider('cp-1'));
+      final restartedPreview = _manualTransport(tester).state;
       expect(restartedPreview.playbackMode, PlaybackMode.loopPreview);
       expect(restartedPreview.playing, isTrue);
       expect(restartedPreview.playhead, closeTo(expectedAuditionStart, 0.001));
@@ -508,7 +509,7 @@ void main() {
     final secondAi = container.read(replaceEditorProvider('cp-1')).ai.td[1];
     await tester.tap(find.byKey(const ValueKey('manual-refine-ai-apply-1')));
     await tester.pump();
-    final previewState = container.read(replaceEditorProvider('cp-1'));
+    final previewState = _manualTransport(tester).state;
     final expectedPreviewStart = pointPreviewWindowForTesting(
       timeSec: secondAi.t,
       durationSec: previewState.ai.durationSec,
@@ -519,13 +520,12 @@ void main() {
     expect(find.text('暂停试听'), findsNothing);
     expect(find.text('继续试听'), findsNothing);
 
-    notifier.setPlayhead(expectedPreviewStart + 0.75);
-    notifier.setPlayback(PlaybackMode.pointPreview, playing: true);
+    _manualTransport(tester).onSkipFwd();
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('manual-refine-point-preview')));
     await tester.pump();
 
-    final restartedPreview = container.read(replaceEditorProvider('cp-1'));
+    final restartedPreview = _manualTransport(tester).state;
     expect(restartedPreview.playbackMode, PlaybackMode.pointPreview);
     expect(restartedPreview.playing, isTrue);
     expect(restartedPreview.playhead, closeTo(expectedPreviewStart, 0.001));
@@ -570,17 +570,17 @@ void main() {
 
     expect(find.text('磁吸到拍'), findsOneWidget);
     for (var i = 0; i < 3; i += 1) {
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyZ);
       await tester.pump();
       try {
-        expect(find.text('自由放置 · Alt'), findsOneWidget);
+        expect(find.text('自由放置'), findsOneWidget);
         expect(find.text('磁吸到拍'), findsNothing);
       } finally {
-        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyZ);
         await tester.pump();
       }
       expect(find.text('磁吸到拍'), findsOneWidget);
-      expect(find.text('自由放置 · Alt'), findsNothing);
+      expect(find.text('自由放置'), findsNothing);
     }
 
     expect(tester.takeException(), isNull);
@@ -658,7 +658,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('manual refine overlay follows the active playback playhead', (
+  testWidgets('manual refine playback ignores main editor position changes', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -694,6 +694,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 260));
 
+    final localPosition = _manualTransport(tester).state.playhead;
     notifier.setPlayback(PlaybackMode.full, playing: true);
     notifier.setPlayhead(80);
     await tester.pump();
@@ -701,13 +702,13 @@ void main() {
     final focusWaveform = tester.widget<ManualFocusWaveform>(
       find.byType(ManualFocusWaveform),
     );
-    expect(focusWaveform.playhead, 80);
+    expect(focusWaveform.playhead, localPosition);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('manual-refine-overlay')),
         matching: find.textContaining('1:20.00', findRichText: true),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
   });
@@ -746,9 +747,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 260));
 
-    notifier.setPlayback(PlaybackMode.full, playing: true);
+    await tester.tap(find.byKey(const ValueKey('manual-refine-loop-preview')));
     await tester.pump();
-    expect(container.read(replaceEditorProvider('cp-1')).playing, isTrue);
+    expect(_manualTransport(tester).state.playing, isTrue);
+    expect(container.read(replaceEditorProvider('cp-1')).playing, isFalse);
 
     await tester.tap(find.byTooltip('取消人工选点'));
     await tester.pump();
@@ -870,7 +872,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.byKey(const ValueKey('manual-refine-overlay')), findsOneWidget);
-    expect(c.read(replaceEditorProvider('cp-1')).tdConfirmed, isFalse);
+    expect(c.read(replaceEditorProvider('cp-1')).tdConfirmed, isTrue);
     expect(
       find.byKey(const ValueKey('manual-refine-ai-apply-1')),
       findsOneWidget,
@@ -1231,7 +1233,7 @@ void main() {
       expect(find.text('运行中 · 0/2'), findsOneWidget);
       expect(find.text('MERT 候选评分'), findsWidgets);
       expect(find.textContaining('AI 全局置信度'), findsNothing);
-      expect(find.text('段：分析中'), findsOneWidget);
+      expect(find.text('段：分析中'), findsNothing);
       expect(find.text('BPM --'), findsOneWidget);
 
       final playButton = find.byKey(const ValueKey('editor-play-inline'));
@@ -1369,3 +1371,13 @@ String _formatManualFineTimecodeForTest(double seconds) {
       '${wholeSeconds.toString().padLeft(2, "0")}.'
       '${milliseconds.toString().padLeft(3, "0")}';
 }
+
+TransportBar _manualTransport(WidgetTester tester) =>
+    tester.widget<TransportBar>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('manual-refine-overlay')),
+            matching: find.byType(TransportBar),
+          )
+          .first,
+    );

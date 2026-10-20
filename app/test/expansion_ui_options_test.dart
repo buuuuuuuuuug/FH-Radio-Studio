@@ -114,18 +114,19 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final finder = find.byType(RadioGroup<GameDeploymentTarget>);
-    expect(
-      tester.widget<RadioGroup<GameDeploymentTarget>>(finder).groupValue,
-      GameDeploymentTarget.mediapc,
-    );
+    final finder = find.byKey(const ValueKey('deploy-choice-mediapc'));
+    expect(tester.widget<Semantics>(finder).properties.selected, isTrue);
     expect(find.text('media（覆盖原文件）'), findsOneWidget);
     expect(find.text('mediapc（默认）'), findsOneWidget);
     await tester.tap(find.text('media（覆盖原文件）'));
     await tester.pumpAndSettle();
+    expect(tester.widget<Semantics>(finder).properties.selected, isFalse);
     expect(
-      tester.widget<RadioGroup<GameDeploymentTarget>>(finder).groupValue,
-      GameDeploymentTarget.media,
+      tester
+          .widget<Semantics>(find.byKey(const ValueKey('deploy-choice-media')))
+          .properties
+          .selected,
+      isTrue,
     );
     expect(tester.takeException(), isNull);
     if (Platform.environment['CAPTURE_EXPANSION_OPTIONS'] == '1') {

@@ -45,6 +45,11 @@ const _trackHeaderHeight = 36.0;
 const _trackRowHeight = 52.0;
 const _songTablePanelChromeHeight = 51.0;
 
+final sirenPlayerFactoryProvider = Provider<Player Function()>(
+  (ref) =>
+      () => Player(),
+);
+
 class SirenLibraryScreen extends ConsumerStatefulWidget {
   const SirenLibraryScreen({super.key});
 
@@ -64,6 +69,8 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
   Player? _player;
   SystemAudioOutputFollower? _audioOutputFollower;
   StreamSubscription<bool>? _playingSub;
+  int _playbackRequest = 0;
+  Future<void> _playbackCommands = Future.value();
 
   var _query = '';
   var _filter = _SirenFilter.all;
@@ -77,6 +84,7 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
 
   @override
   void dispose() {
+    _playbackRequest++;
     _searchController.dispose();
     _playingSub?.cancel();
     _audioOutputFollower?.dispose();
@@ -86,7 +94,7 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
 
   Player get _audioPlayer {
     final existing = _player;
-    final player = existing ?? Player();
+    final player = existing ?? ref.read(sirenPlayerFactoryProvider)();
     if (existing == null) {
       _player = player;
       _audioOutputFollower = followSystemAudioOutput(player);
@@ -589,10 +597,17 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
   }
 
   Future<void> _togglePlayback(SirenTrack track) async {
+    final request = ++_playbackRequest;
     if (_playingCid == track.cid && _playing) {
-      await _audioPlayer.pause();
-      if (!mounted) return;
-      setState(() => _playing = false);
+      try {
+        await _runPlaybackCommand(request, (player) => player.pause());
+        if (!_isCurrentPlaybackRequest(request)) return;
+        setState(() => _playing = false);
+      } on Object catch (error) {
+        if (_isCurrentPlaybackRequest(request)) {
+          _recordTrackError(track.cid, error);
+        }
+      }
       return;
     }
 
@@ -603,27 +618,49 @@ class _SirenLibraryScreenState extends ConsumerState<SirenLibraryScreen> {
     });
     try {
       final detail = await _ensureSongDetail(track);
+      if (!_isCurrentPlaybackRequest(request)) return;
       final cache = ref.read(sirenAudioCacheProvider);
       final cached = await cache.cachedAudioFile(detail);
+      if (!_isCurrentPlaybackRequest(request)) return;
       final mediaUri = cached == null
           ? detail.sourceUrl
           : Uri.file(cached.path).toString();
-      await _audioPlayer.open(Media(mediaUri), play: true);
+      await _runPlaybackCommand(request, (player) async {
+        await player.open(Media(mediaUri), play: false);
+        if (_isCurrentPlaybackRequest(request)) await player.play();
+      });
+      if (!_isCurrentPlaybackRequest(request)) return;
       if (cached == null) {
         unawaited(_cacheInBackground(cache, detail, track));
       }
-      if (!mounted) return;
       setState(() {
         _playingCid = track.cid;
         _playing = true;
       });
     } on Object catch (error) {
-      _recordTrackError(track.cid, error);
+      if (_isCurrentPlaybackRequest(request)) {
+        _recordTrackError(track.cid, error);
+      }
     } finally {
       if (mounted) {
         setState(() => _playingBusyCids.remove(track.cid));
       }
     }
+  }
+
+  bool _isCurrentPlaybackRequest(int request) =>
+      mounted && request == _playbackRequest;
+
+  Future<void> _runPlaybackCommand(
+    int request,
+    Future<void> Function(Player) command,
+  ) {
+    final pending = _playbackCommands.then((_) async {
+      if (_isCurrentPlaybackRequest(request)) await command(_audioPlayer);
+    });
+    // A failed native command must not prevent a subsequent selection.
+    _playbackCommands = pending.onError((_, _) {});
+    return pending;
   }
 
   Future<void> _cacheInBackground(
@@ -1308,16 +1345,18 @@ class _LatestStripState extends State<_LatestStrip>
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Text(
-                        'LATEST',
-                        style: RmText.mono(
-                          11,
-                          color: const Color(0xFF24B347),
-                          weight: FontWeight.w800,
-                          letterSpacing: 0.22 * 11,
+                      Expanded(
+                        child: Text(
+                          'LATEST',
+                          style: RmText.mono(
+                            11,
+                            color: const Color(0xFF24B347),
+                            weight: FontWeight.w800,
+                            letterSpacing: 0.22 * 11,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
@@ -3674,16 +3713,18 @@ class _SirenLoadingTicker extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Text(
-                      'LATEST',
-                      style: RmText.mono(
-                        11,
-                        color: const Color(0xFF24B347),
-                        weight: FontWeight.w800,
-                        letterSpacing: 0.22 * 11,
+                    Expanded(
+                      child: Text(
+                        'LATEST',
+                        style: RmText.mono(
+                          11,
+                          color: const Color(0xFF24B347),
+                          weight: FontWeight.w800,
+                          letterSpacing: 0.22 * 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

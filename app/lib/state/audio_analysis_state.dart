@@ -300,7 +300,16 @@ class AudioAnalysisState {
 }
 
 class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
-  AudioAnalysisController(this.ref) : super(const AudioAnalysisState.initial());
+  AudioAnalysisController(this.ref)
+    : super(const AudioAnalysisState.initial()) {
+    ref.listen<String>(studioProvider.select((state) => state.projectDir), (
+      _,
+      _,
+    ) {
+      unawaited(cancel());
+      state = const AudioAnalysisState.initial();
+    });
+  }
 
   final Ref ref;
   CliCancellationToken? _activeToken;
@@ -310,8 +319,11 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
     final studio = ref.read(studioProvider);
     final repoRoot = studio.repoRoot;
     final profile = studio.aiProfile;
-    await cancel();
     final runId = ++_runId;
+    final previous = _activeToken;
+    _activeToken = null;
+    if (previous != null) await previous.cancel();
+    if (!mounted || runId != _runId) return null;
     final token = CliCancellationToken();
     _activeToken = token;
     state = AudioAnalysisState(
@@ -320,99 +332,113 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
       result: state.result,
       progressSteps: _startupProgressSteps(),
     );
-    final ffmpeg = _vendoredFfmpeg(repoRoot);
-    final runner = ref.read(audioAnalysisCliRunnerProvider);
-    final slm = ref.read(editorOptionsProvider).slmEnabled;
-    final slmDll =
-        '${FhRadioStudioCli(repoRoot: repoRoot).uvRuntime.audioToolsDir}/seamless/loopfinder.dll';
-    final result = await runner(
-      repoRoot,
-      [
-        'analyze-audio',
-        path,
-        '--profile',
-        profile,
-        '--bins',
-        '320',
-        if (ffmpeg != null) ...['--ffmpeg', ffmpeg],
-        if (slm) ...[
-          '--loop-engine',
-          'seamless',
-          '--slm-dll',
-          slmDll,
-          '--loop-cache-dir',
-          '${studio.projectDir}/analysis/seamless-loops',
+    try {
+      final ffmpeg = _vendoredFfmpeg(repoRoot);
+      final runner = ref.read(audioAnalysisCliRunnerProvider);
+      final slm = ref.read(editorOptionsProvider).slmEnabled;
+      final slmDll =
+          '${FhRadioStudioCli(repoRoot: repoRoot).uvRuntime.audioToolsDir}/seamless/loopfinder.dll';
+      final result = await runner(
+        repoRoot,
+        [
+          'analyze-audio',
+          path,
+          '--profile',
+          profile,
+          '--bins',
+          '320',
+          if (ffmpeg != null) ...['--ffmpeg', ffmpeg],
+          if (slm) ...[
+            '--loop-engine',
+            'seamless',
+            '--slm-dll',
+            slmDll,
+            '--loop-cache-dir',
+            '${studio.projectDir}/analysis/seamless-loops',
+          ],
+          '--json',
+          '--progress-jsonl',
         ],
-        '--json',
-        '--progress-jsonl',
-      ],
-      cancellationToken: token,
-      onStderr: (line) {
-        _handleProgressLine(runId, token, line);
-      },
-    );
-    if (!mounted || runId != _runId || token.isCancelled || result.cancelled) {
-      if (mounted && _activeToken == token) {
-        _activeToken = null;
+        cancellationToken: token,
+        onStderr: (line) {
+          _handleProgressLine(runId, token, line);
+        },
+      );
+      if (!_isCurrent(runId, token) || result.cancelled) return null;
+      if (!result.ok) {
+        final stderr = _stripProgressLines(result.stderr).trim();
+        final stdout = _stripProgressLines(result.stdout).trim();
         state = AudioAnalysisState(
           busy: false,
           path: path,
-          result: state.result,
+          error: stderr.isEmpty ? stdout : stderr,
           progressSteps: state.progressSteps,
         );
+        return null;
       }
-      return null;
-    }
-    _activeToken = null;
-    if (!result.ok) {
-      final stderr = _stripProgressLines(result.stderr).trim();
-      final stdout = _stripProgressLines(result.stdout).trim();
-      state = AudioAnalysisState(
-        busy: false,
-        path: path,
-        error: stderr.isEmpty ? stdout : stderr,
-        progressSteps: state.progressSteps,
-      );
-      return null;
-    }
-    try {
-      final decoded = jsonDecode(result.stdout);
-      final map = _asMap(decoded);
-      if (map == null) {
-        throw const FormatException('JSON root is not an object');
-      }
-      final parsed = AudioAnalysisResult.fromJson(map);
-      // Retain detected beats with the waveform for subsequent manual sessions.
       try {
-        await WaveformCache.write(studio.projectDir, path, map);
-      } on Object {
-        // A missing optional cache must not invalidate successful analysis.
+        final decoded = jsonDecode(result.stdout);
+        final map = _asMap(decoded);
+        if (map == null) {
+          throw const FormatException('JSON root is not an object');
+        }
+        final parsed = AudioAnalysisResult.fromJson(map);
+        // Retain detected beats with the waveform for subsequent manual sessions.
+        try {
+          await WaveformCache.write(studio.projectDir, path, map);
+        } on Object {
+          // A missing optional cache must not invalidate successful analysis.
+        }
+        if (!_isCurrent(runId, token)) return null;
+        state = AudioAnalysisState(
+          busy: false,
+          path: path,
+          result: parsed,
+          progressSteps: state.progressSteps,
+        );
+        return parsed;
+      } on Object catch (error) {
+        if (!_isCurrent(runId, token)) return null;
+        state = AudioAnalysisState(
+          busy: false,
+          path: path,
+          error: '分析结果解析失败：$error',
+          progressSteps: state.progressSteps,
+        );
+        return null;
       }
+    } on Object catch (error) {
+      if (!_isCurrent(runId, token)) return null;
       state = AudioAnalysisState(
         busy: false,
         path: path,
-        result: parsed,
-        progressSteps: state.progressSteps,
-      );
-      return parsed;
-    } on FormatException catch (error) {
-      state = AudioAnalysisState(
-        busy: false,
-        path: path,
-        error: '分析结果解析失败：${error.message}',
+        error: '分析失败：$error',
         progressSteps: state.progressSteps,
       );
       return null;
+    } finally {
+      if (mounted && identical(_activeToken, token)) {
+        _activeToken = null;
+        if (state.busy) {
+          state = AudioAnalysisState(
+            busy: false,
+            path: path,
+            result: state.result,
+            error: state.error,
+            progressSteps: state.progressSteps,
+          );
+        }
+      }
     }
   }
+
+  bool _isCurrent(int runId, CliCancellationToken token) =>
+      mounted && runId == _runId && !token.isCancelled;
 
   Future<void> cancel() async {
     final token = _activeToken;
     _activeToken = null;
     _runId++;
-    if (token != null) {
-      await token.cancel();
-    }
     if (mounted && state.busy) {
       state = AudioAnalysisState(
         busy: false,
@@ -421,6 +447,7 @@ class AudioAnalysisController extends StateNotifier<AudioAnalysisState> {
         progressSteps: state.progressSteps,
       );
     }
+    if (token != null) await token.cancel();
   }
 
   @override

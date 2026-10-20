@@ -29,7 +29,13 @@ final seamlessLoopLoaderProvider = Provider<SeamlessLoopLoader>(
         ? null
         : await SeamlessLoopCache.read(project, source, dll);
     if (token.isCancelled) throw const FormatException('循环分析已取消');
-    if (cached != null) return seamlessCandidatesFromPayload(cached);
+    if (cached != null) {
+      try {
+        return seamlessCandidatesFromPayload(cached);
+      } on FormatException {
+        // The view cache is optional; regenerate a damaged entry through CLI.
+      }
+    }
     final result = await cli.runBase([
       'analyze-seamless-loops',
       source,
@@ -57,20 +63,31 @@ final seamlessLoopLoaderProvider = Provider<SeamlessLoopLoader>(
 );
 
 List<LoopCandidate> seamlessCandidatesFromPayload(Map<String, dynamic> data) {
-  final raw = (data['candidates'] as Map)['tl'] as List;
+  final duration = data['duration_sec'];
+  final candidates = data['candidates'];
+  final raw = candidates is Map ? candidates['tl'] : null;
+  if (duration is! num || !duration.isFinite || duration <= 0 || raw is! List) {
+    throw const FormatException('循环分析结果格式无效，可重新分析或手动精调。');
+  }
   final loops = <LoopCandidate>[];
   for (final item in raw) {
-    final a = (item['start'] as num).toDouble();
-    final b = (item['end'] as num).toDouble();
-    final duration = (data['duration_sec'] as num).toDouble();
-    if (!a.isFinite || !b.isFinite || a < 0 || b <= a || b > duration) {
+    if (item is! Map) continue;
+    final start = item['start'], end = item['end'], score = item['score'];
+    if (start is! num || end is! num || score is! num) continue;
+    final a = start.toDouble(), b = end.toDouble();
+    if (!a.isFinite ||
+        !b.isFinite ||
+        !score.isFinite ||
+        a < 0 ||
+        b <= a ||
+        b > duration) {
       continue;
     }
     loops.add(
       LoopCandidate(
         start: a,
         end: b,
-        score: (item['score'] as num).toDouble().clamp(0, 1),
+        score: score.toDouble().clamp(0, 1),
         bars: 0,
         why: '${item['why']}',
       ),

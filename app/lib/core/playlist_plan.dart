@@ -115,10 +115,31 @@ class PlaylistAssignment {
 }
 
 class PlaylistPlan {
-  const PlaylistPlan({
-    required this.assignments,
-    this.builtinTargets = const {},
-  });
+  PlaylistPlan({
+    required Map<String, PlaylistAssignment> assignments,
+    Set<String> builtinTargets = const {},
+  }) : assignments = Map.unmodifiable(assignments),
+       builtinTargets = Set.unmodifiable(builtinTargets);
+
+  static final _encoded = Expando<String>('playlist JSON');
+  static final _radioIndex = Expando<Map<String, List<PlaylistAssignment>>>(
+    'radio assignments',
+  );
+  Map<String, List<PlaylistAssignment>> get _byRadio =>
+      _radioIndex[this] ??= _buildRadioIndex();
+  Map<String, List<PlaylistAssignment>> _buildRadioIndex() {
+    final result = <String, List<PlaylistAssignment>>{};
+    for (final a in assignments.values) {
+      if (a.isAssigned) {
+        result.putIfAbsent('${a.radioCode}|${a.playlistType}', () => []).add(a);
+      }
+    }
+    for (final items in result.values) {
+      items.sort(_assignmentSort);
+    }
+    return result;
+  }
+
   const PlaylistPlan.empty()
     : assignments = const {},
       builtinTargets = const {};
@@ -182,16 +203,7 @@ class PlaylistPlan {
   ) {
     final radio = _canonicalRadioCodeOrEmpty(radioCode);
     final type = PlaylistAssignment.normalizePlaylistType(playlistType);
-    final items = assignments.values
-        .where(
-          (assignment) =>
-              assignment.isAssigned &&
-              assignment.radioCode == radio &&
-              assignment.playlistType == type,
-        )
-        .toList();
-    items.sort(_assignmentSort);
-    return items;
+    return [...?_byRadio['$radio|$type']];
   }
 
   PlaylistPlan moveBefore({
@@ -419,7 +431,9 @@ class PlaylistPlan {
   /// Serialize to the schema_version 2 document that `build-package
   /// --playlist-plan -` reads from stdin. Same shape as the legacy
   /// `playlist_plan.json`, emitted compactly for a single pipe write.
-  String encodeForCli() {
+  String encodeForCli() => _encoded[this] ??= _encodeForCli();
+
+  String _encodeForCli() {
     final ordered = assignments.values.toList()..sort(_assignmentSort);
     final targets = builtinTargets.toList()..sort();
     return jsonEncode({

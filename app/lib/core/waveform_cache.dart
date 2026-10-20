@@ -16,7 +16,7 @@ class WaveformCache {
     final key = sha256.convert(utf8.encode(identity)).toString();
     return (
       File('$project/analysis/waveforms/view-$key.json'),
-      'v1:${stat.size}:${stat.modified.microsecondsSinceEpoch}',
+      'v3:${stat.size}:${stat.modified.microsecondsSinceEpoch}',
     );
   }
 

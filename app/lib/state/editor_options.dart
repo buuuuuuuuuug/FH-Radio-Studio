@@ -1,3 +1,5 @@
+import '../core/playlist_capacity.dart';
+import 'playlist_capacity.dart';
 import 'playlist_catalog_state.dart';
 import 'playlist_plan_state.dart';
 import '../domain/radio_library.dart';
@@ -43,41 +45,24 @@ class EditorOptionsController extends StateNotifier<EditorOptions> {
   }
 
   List<String> expansionOverflow() {
-    final baseline = ref.read(baselinePlaylistCatalogProvider);
     final catalog = ref.read(playlistCatalogProvider);
     final plan = ref.read(effectivePlaylistPlanProvider);
-    final issues = <String>[];
-    final hasPlan = ref.read(playlistPlanProvider.notifier).hasUserPlan;
-    for (final radio in catalog.radios.where(
-      (r) => isUiSupportedRadio(name: r.name),
-    )) {
-      final allSources = <String>{};
-      var maxCapacity = 0;
-      for (final type in ['FreeRoam', 'Event']) {
-        final original = baseline?.tracksOfRadio(radio.code, type).length ?? 0;
-        final capacity = original > 0 ? original : radio.slot;
-        if (capacity > maxCapacity) maxCapacity = capacity;
-        final assigned = plan.assignmentsForRadio(radio.code, type);
-        allSources.addAll(assigned.map((a) => a.source));
-        final count = plan.hasBuiltinOverride(radio.code, type)
-            ? 0
-            : assigned.isNotEmpty || hasPlan
-            ? assigned.length
-            : catalog.modeOfList(radio.code, type) == StationMode.custom
-            ? catalog.tracksOfRadio(radio.code, type).length
-            : 0;
-        if (count > capacity) {
-          issues.add(
-            '${radio.code} ${type == "Event" ? "比赛" : "漫游"}：$count / $capacity 首',
-          );
-        }
-      }
-      if (allSources.length > maxCapacity &&
-          !issues.any((e) => e.startsWith('${radio.code} '))) {
-        issues.add('${radio.code} 跨场景合计：${allSources.length} / $maxCapacity 首');
-      }
-    }
-    return issues;
+    final hasPlan =
+        ref.read(playlistPlanProvider.notifier).hasUserPlan || plan.hasDraft;
+    final fallback = <String, Map<String, int>>{
+      if (!hasPlan)
+        for (final radio in catalog.radios)
+          radio.code: {
+            for (final type in ['FreeRoam', 'Event'])
+              if (catalog.modeOfList(radio.code, type) == StationMode.custom)
+                type: catalog.tracksOfRadio(radio.code, type).length,
+          },
+    };
+    return describeCapacityViolations(
+      ref
+          .read(playlistCapacityPolicyProvider)
+          .violations(plan, fallbackCounts: fallback),
+    );
   }
 
   bool update({

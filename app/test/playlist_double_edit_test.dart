@@ -274,34 +274,28 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-  testWidgets(
-    'game view resolves CLI source map and leaves original songs without an edit action',
-    (tester) async {
-      final f = await setupPlaylist(tester, gameView: true);
-      final cards = find.descendant(
-        of: find.byKey(const ValueKey('playlist-radio-column-R1')),
-        matching: find.byType(TrackCard),
-      );
-      expect(tester.widget<TrackCard>(cards.at(0)).locked, isTrue);
-      expect(tester.widget<TrackCard>(cards.at(0)).onOpenEditor, isNotNull);
-      expect(tester.widget<TrackCard>(cards.at(1)).onOpenEditor, isNull);
-      await doubleClick(tester, cards.at(1));
-      await tester.pump();
-      expect(
-        f.router.routeInformationProvider.value.uri.path,
-        RmRoutes.playlist,
-      );
-      await doubleClick(tester, cards.at(0));
-      await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<ReplaceEditorScreen>(find.byType(ReplaceEditorScreen))
-            .trackId,
-        kCustomPool.first.id,
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('game view is read-only even when the song has a local source', (
+    tester,
+  ) async {
+    final f = await setupPlaylist(tester, gameView: true);
+    expect(find.text('2 / 2'), findsOneWidget);
+    final cards = find.descendant(
+      of: find.byKey(const ValueKey('playlist-radio-column-R1')),
+      matching: find.byType(TrackCard),
+    );
+    expect(tester.widget<TrackCard>(cards.at(0)).locked, isTrue);
+    expect(tester.widget<TrackCard>(cards.at(0)).onOpenEditor, isNull);
+    expect(find.text('双击自建曲目进入编辑'), findsNothing);
+    expect(tester.widget<TrackCard>(cards.at(1)).onOpenEditor, isNull);
+    await doubleClick(tester, cards.at(1));
+    await tester.pump();
+    expect(f.router.routeInformationProvider.value.uri.path, RmRoutes.playlist);
+    await doubleClick(tester, cards.at(0));
+    await tester.pumpAndSettle();
+    expect(find.byType(ReplaceEditorScreen), findsNothing);
+    expect(f.router.routeInformationProvider.value.uri.path, RmRoutes.playlist);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _FixtureController extends StudioController {

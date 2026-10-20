@@ -265,6 +265,15 @@ class FhRadioStudioCli {
     CliCancellationToken? cancellationToken,
     String? stdinInput,
   }) async {
+    if (cancellationToken?.isCancelled ?? false) {
+      return CliRunResult(
+        exitCode: -1,
+        stdout: '',
+        stderr: 'Cancelled',
+        commandLine: invocation.commandLine,
+        cancelled: true,
+      );
+    }
     final process = await Process.start(
       invocation.executable,
       invocation.args,
@@ -338,45 +347,17 @@ class FhRadioStudioCli {
   static Future<void> _killProcessTree(int pid) async {
     if (Platform.isWindows) {
       try {
-        final script =
-            '''
-\$ErrorActionPreference = 'SilentlyContinue'
-\$root = $pid
-\$all = Get-CimInstance Win32_Process
-\$children = @{}
-foreach (\$proc in \$all) {
-  \$parent = [int]\$proc.ParentProcessId
-  if (-not \$children.ContainsKey(\$parent)) { \$children[\$parent] = @() }
-  \$children[\$parent] += [int]\$proc.ProcessId
-}
-\$toKill = New-Object System.Collections.Generic.List[int]
-function Add-Children([int]\$id) {
-  if (\$children.ContainsKey(\$id)) {
-    foreach (\$child in \$children[\$id]) {
-      Add-Children \$child
-      [void]\$toKill.Add(\$child)
-    }
-  }
-}
-Add-Children \$root
-[void]\$toKill.Add(\$root)
-foreach (\$id in \$toKill) { Stop-Process -Id \$id -Force }
-''';
-        await Process.run('powershell', [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          script,
+        // taskkill can terminate our own process tree without requiring CIM/WMI
+        // access. A failed tree lookup must still fall back to the root process.
+        final result = await Process.run('taskkill', [
+          '/PID',
+          '$pid',
+          '/T',
+          '/F',
         ], runInShell: false);
-        return;
+        if (result.exitCode == 0) return;
       } on Object {
-        try {
-          Process.killPid(pid, ProcessSignal.sigterm);
-        } on Object {
-          // Process may have already exited between registration and cleanup.
-        }
-        return;
+        // Minimal environments may not provide taskkill.
       }
     }
     try {

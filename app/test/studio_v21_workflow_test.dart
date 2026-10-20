@@ -57,7 +57,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final p = await SharedPreferences.getInstance();
       final c = EditorShortcutController(p);
-      expect(c.state[EditorAction.previous]!.label, 'Ctrl + Shift + ↑');
+      expect(c.state[EditorAction.previous]!.label, 'Shift + ↑');
       expect(shortcutConflict(c.state), isNull);
       final bad = {
         ...c.state,
@@ -162,12 +162,12 @@ void main() {
         .trackId;
     final queue = f.container.read(editorSongQueueProvider).ids;
     expect(current, queue.first);
-    await keyCombo(t, LogicalKeyboardKey.arrowUp, ctrl: true, shift: true);
+    await keyCombo(t, LogicalKeyboardKey.arrowUp, shift: true);
     current = t
         .widget<ReplaceEditorScreen>(find.byType(ReplaceEditorScreen))
         .trackId;
     expect(current, queue.last);
-    await keyCombo(t, LogicalKeyboardKey.arrowDown, ctrl: true, shift: true);
+    await keyCombo(t, LogicalKeyboardKey.arrowDown, shift: true);
     expect(
       t.widget<ReplaceEditorScreen>(find.byType(ReplaceEditorScreen)).trackId,
       queue.first,
@@ -280,13 +280,17 @@ void main() {
           container: f.container,
           child: ProviderScope(
             overrides: [
+              timingImportFilePickerProvider.overrideWithValue(
+                () async => "C:/fixtures/points.csv",
+              ),
               timingImportRunnerProvider.overrideWithValue((
                 root,
                 args,
                 input,
               ) async {
                 calls.add([...args]);
-                expect(input, contains('Song'));
+                expect(input, isNull);
+                expect(args, contains('C:/fixtures/points.csv'));
                 return CliRunResult(
                   commandLine: 'test import',
                   exitCode: 0,
@@ -313,10 +317,7 @@ void main() {
           ),
         ),
       );
-      await t.enterText(
-        find.byKey(const ValueKey('timing-import-text')),
-        'title,TL\nSong,2 -> 7',
-      );
+      await t.tap(find.byKey(const ValueKey('timing-import-file')));
       await t.pump();
       await t.tap(find.text('预览匹配'));
       await t.pumpAndSettle();

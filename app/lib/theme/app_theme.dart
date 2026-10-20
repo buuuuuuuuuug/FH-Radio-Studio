@@ -186,6 +186,21 @@ ThemeData buildAppTheme({
     extensions: [rm],
     splashFactory: NoSplash.splashFactory,
     visualDensity: VisualDensity.standard,
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      width: 600,
+      backgroundColor: rm.panel,
+      contentTextStyle: RmText.sans(13, color: rm.fg, height: 1.5),
+      elevation: 8,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(RmTokens.rLg),
+        side: BorderSide(color: rm.border2),
+      ),
+      insetPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      showCloseIcon: true,
+      closeIconColor: rm.fg2,
+      actionTextColor: rm.accent.base,
+    ),
     tooltipTheme: TooltipThemeData(
       constraints: const BoxConstraints(minHeight: 28, maxWidth: 320),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),

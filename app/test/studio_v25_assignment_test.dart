@@ -461,13 +461,13 @@ void main() {
               .mainAxisExtent! +
           12;
       controller.jumpTo(extent * .7);
-      await t.pump(const Duration(milliseconds: 500));
+      await t.pump(const Duration(milliseconds: 300));
       expect(controller.offset, closeTo(extent * .7, 1));
       // Continuing to scroll restarts the full idle detection period.
       controller.jumpTo(extent * .75);
-      await t.pump(const Duration(milliseconds: 500));
+      await t.pump(const Duration(milliseconds: 300));
       expect(controller.offset, closeTo(extent * .75, 1));
-      await t.pump(const Duration(milliseconds: 220));
+      await t.pump(const Duration(milliseconds: 170));
       await t.pumpAndSettle();
       expect(controller.offset, closeTo(extent, 1));
       c

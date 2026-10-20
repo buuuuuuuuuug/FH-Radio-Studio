@@ -13,11 +13,13 @@
   }
   final left = start.clamp(0.0, duration - span);
   final position = playhead.isFinite ? playhead.clamp(0.0, duration) : left;
+  const edge = .1;
+  final epsilon = span * 1e-9;
   var next = left;
-  if (position >= left + span * .9) {
-    next = position - span * .2;
-  } else if (position <= left + span * .1) {
-    next = position - span * .8;
+  if (position > left + span * (1 - edge) + epsilon) {
+    next = position - span * edge;
+  } else if (position < left + span * edge - epsilon) {
+    next = position - span * (1 - edge);
   }
   next = next.clamp(0.0, duration - span);
   return (start: next, end: next + span);

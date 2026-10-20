@@ -140,7 +140,7 @@ class EditorSidePanel extends ConsumerWidget {
                 bottomRight: Radius.circular(RmTokens.rLg),
               ),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -159,8 +159,6 @@ class EditorSidePanel extends ConsumerWidget {
                     ),
                     _row(context, 'BPM', ai.bpm.toStringAsFixed(1)),
                     if (!manualOnly) _row(context, '节拍数', '${ai.beats.length}'),
-                    if (!manualOnly)
-                      _row(context, '段落识别', '${ai.segments.length}'),
                     Container(
                       height: 1,
                       color: rm.border,
@@ -476,7 +474,7 @@ class EditorSidePanel extends ConsumerWidget {
   Widget _row(BuildContext context, String k, String v, {Color? valueColor}) {
     final rm = context.rm;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           Text(k, style: RmText.mono(11, color: rm.fg3)),
@@ -522,17 +520,35 @@ class EditorSidePanel extends ConsumerWidget {
           keys[EditorAction.oneForward]!.label,
         ],
       ),
+      ('保存', [keys[EditorAction.save]!.label]),
       ('撤销', [keys[EditorAction.undo]!.label]),
       ('两端同移组合键', [loopCombinationLabel(keys)]),
       (
-        '精修：上一条 / 下一条建议',
+        '精修：切换建议',
         [
           keys[EditorAction.suggestionPrevious]!.label,
           keys[EditorAction.suggestionNext]!.label,
         ],
       ),
-      ('精修：回到已保存配置', [keys[EditorAction.restoreSaved]!.label]),
+      ('精修：恢复已保存', [keys[EditorAction.restoreSaved]!.label]),
       ('分配至电台', [keys[EditorAction.assign]!.label]),
+      (
+        '精修 TD / PD',
+        [
+          keys[EditorAction.manualTd]!.label,
+          keys[EditorAction.manualPd]!.label,
+        ],
+      ),
+      (
+        '精修 TL / PL',
+        [
+          keys[EditorAction.manualTl]!.label,
+          keys[EditorAction.manualPl]!.label,
+        ],
+      ),
+      ('精修：取播放位置', [keys[EditorAction.markPlayback]!.label]),
+      ('精修：按住自由放置', [keys[EditorAction.freePlace]!.label]),
+      ('精修：磁吸 / 自由', [keys[EditorAction.toggleSnap]!.label]),
       ('上一首', [keys[EditorAction.previous]!.label]),
       ('下一首', [keys[EditorAction.next]!.label]),
     ];
@@ -546,12 +562,9 @@ class EditorSidePanel extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 children: [
-                  Expanded(
-                    child: Text(i.$1, style: RmText.sans(11.5, color: rm.fg2)),
-                  ),
+                  Text(i.$1, style: RmText.sans(11, color: rm.fg2)),
                   const SizedBox(width: 6),
                   Expanded(
-                    flex: 2,
                     child: Wrap(
                       alignment: WrapAlignment.end,
                       spacing: 4,

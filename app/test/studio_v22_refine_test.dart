@@ -45,15 +45,21 @@ void main() {
       final ctl = EditorShortcutController(
         await SharedPreferences.getInstance(),
       );
-      expect(ctl.state[EditorAction.previous]!.label, 'Ctrl + Shift + ↑');
-      expect(ctl.state[EditorAction.next]!.label, 'Ctrl + Shift + ↓');
+      expect(ctl.state[EditorAction.previous]!.label, 'Shift + ↑');
+      expect(ctl.state[EditorAction.next]!.label, 'Shift + ↓');
       expect(ctl.state[EditorAction.play]!.label, 'Ctrl + P');
       expect(ctl.state[EditorAction.suggestionPrevious]!.label, 'Ctrl + ↑');
       expect(ctl.state[EditorAction.restoreSaved]!.label, 'Ctrl + H');
       expect(shortcutConflict(ctl.state), isNull);
       expect(ctl.state.keys.any((a) => a.name.startsWith('segment')), isFalse);
       expect(
-        ctl.state.values.any((c) => c.key == LogicalKeyboardKey.digit1),
+        ctl.state.values.any(
+          (c) =>
+              c.key == LogicalKeyboardKey.digit1 &&
+              !c.ctrl &&
+              !c.alt &&
+              !c.shift,
+        ),
         isFalse,
       );
       ctl.save({

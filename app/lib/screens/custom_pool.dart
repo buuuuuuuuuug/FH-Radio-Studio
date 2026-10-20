@@ -33,7 +33,6 @@ import '../state/editor_options.dart';
 import '../state/waveform_batch_state.dart';
 import '../widgets/waveform_batch_progress.dart';
 import '../state/custom_pool_tracks.dart';
-import '../state/playlist_catalog_state.dart';
 import '../state/playlist_plan_state.dart';
 import '../state/router.dart';
 import '../state/siren_import_queue_state.dart';
@@ -50,23 +49,13 @@ import '../widgets/rm_icon.dart';
 import '../widgets/rm_panel.dart';
 import '../widgets/rm_segmented.dart';
 import '../widgets/stat_card.dart';
-import 'playlist/playlist_state.dart' show playlistPlanFromCatalog;
+import '../state/game_playlist_membership.dart';
 
 enum _PoolFilter { all, unconfigured, configured }
 
 final _poolOffsets = <String, double>{};
 final _poolFilters = <String, _PoolFilter>{};
 final _poolBrowse = <String, SongBrowse>{};
-
-final _poolGameAssignmentsProvider = Provider<PlaylistPlan>((ref) {
-  final catalog = ref.watch(gamePlaylistCatalogProvider);
-  if (catalog.failed) return const PlaylistPlan.empty();
-  return playlistPlanFromCatalog(
-    catalog,
-    ref.watch(realPoolTracksProvider),
-    includeBuiltinTargets: false,
-  );
-});
 
 class CustomPoolScreen extends ConsumerStatefulWidget {
   const CustomPoolScreen({super.key});
@@ -268,9 +257,9 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     final sirenImport = ref.watch(sirenImportQueueProvider);
     final sirenImporting = sirenImport.importing || cli.busyLabel == '导入塞壬唱片';
     final playlistPlan = ref.watch(effectivePlaylistPlanProvider);
-    final gameCatalog = ref.watch(gamePlaylistCatalogProvider);
-    final gameAssignmentPlan = ref.watch(_poolGameAssignmentsProvider);
-    final gameAssignmentsKnown = _gameAssignmentsKnown(cli, gameCatalog);
+    final membership = ref.watch(gamePlaylistMembershipProvider).asData?.value;
+    final gameAssignmentPlan = membership?.plan ?? const PlaylistPlan.empty();
+    final gameAssignmentsKnown = membership != null;
     final latestPackage = cli.pendingPackageSummary ?? cli.lastPackageSummary;
     final configured = all.where((t) => t.configured).toList();
     final unconfigured = all.where((t) => !t.configured).toList();
@@ -376,6 +365,8 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                                 latestPackage: latestPackage,
                                 playlistPlan: playlistPlan,
                                 gameAssignmentPlan: gameAssignmentPlan,
+                                uncertainGameSources:
+                                    membership?.uncertainSources ?? const {},
                                 gameAssignmentsKnown: gameAssignmentsKnown,
                                 sirenImporting: sirenImporting,
                               ),
@@ -464,7 +455,7 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
             leading: loopBatch.running
                 ? const _ButtonSpinner()
                 : const RmIcon('loop', size: 12),
-            tooltip: '缓存最多 10 个 SeamlessLoopMusic 建议，不修改或确认时间点',
+            tooltip: '分析全部歌曲，每首保留最多 10 个循环建议；不会自动修改或确认时间点',
             onPressed:
                 batch.running || loopBatch.running || cli.busy || tracks.isEmpty
                 ? null
@@ -636,6 +627,7 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     required PackageArtifactSummary? latestPackage,
     required PlaylistPlan playlistPlan,
     required PlaylistPlan gameAssignmentPlan,
+    required Set<String> uncertainGameSources,
     required bool gameAssignmentsKnown,
     required bool sirenImporting,
   }) {
@@ -746,7 +738,11 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                 gameAssignment: gameAssignmentPlan.assignmentForPath(
                   visible[i].source,
                 ),
-                gameAssignmentsKnown: gameAssignmentsKnown,
+                gameAssignmentsKnown:
+                    gameAssignmentsKnown &&
+                    !uncertainGameSources.contains(
+                      PlaylistAssignment.keyForPath(visible[i].source),
+                    ),
                 onPreview: (group) =>
                     unawaited(_quickPreview(visible[i], group)),
                 previewKey: _previewKey,
@@ -936,17 +932,6 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text('删除失败：${error.message}')));
     }
-  }
-
-  bool _gameAssignmentsKnown(StudioState cli, PlaylistCatalog catalog) {
-    if (catalog.failed || cli.fileIntegrity.checkedFiles <= 0) return false;
-    return switch (cli.fileIntegrity.level) {
-      GameFileIntegrityLevel.packageApplied ||
-      GameFileIntegrityLevel.previousPackageApplied ||
-      GameFileIntegrityLevel.baseline ||
-      GameFileIntegrityLevel.buildBumpAvailable => true,
-      _ => false,
-    };
   }
 }
 

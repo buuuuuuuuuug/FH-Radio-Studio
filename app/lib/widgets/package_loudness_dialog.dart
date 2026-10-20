@@ -214,7 +214,7 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(22, 6, 22, 0),
+              padding: const EdgeInsets.fromLTRB(22, 6, 22, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -239,8 +239,7 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
               ),
             ),
             Container(
-              margin: const EdgeInsets.only(top: 16),
-              padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),
+              padding: const EdgeInsets.fromLTRB(22, 12, 22, 14),
               decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: rm.border)),
                 gradient: LinearGradient(
@@ -256,7 +255,7 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      '将以 ${selectedOption.label} 重打包 · 写入前还会再问一次',
+                      '将以 ${selectedOption.label} 重打包',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: RmText.mono(

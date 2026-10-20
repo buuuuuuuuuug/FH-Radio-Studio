@@ -7,6 +7,7 @@ import 'app_state.dart';
 enum EditorAction {
   play,
   confirm,
+  save,
   undo,
   beatBack,
   beatForward,
@@ -20,6 +21,13 @@ enum EditorAction {
   suggestionNext,
   restoreSaved,
   assign,
+  manualTd,
+  manualPd,
+  manualTl,
+  manualPl,
+  markPlayback,
+  toggleSnap,
+  freePlace,
   loopBeatBack,
   loopBeatForward,
   loopTenBack,
@@ -40,7 +48,8 @@ class EditorChord {
   final LogicalKeyboardKey key;
   final bool ctrl, shift, alt, meta;
   final LogicalKeyboardKey? extraKey;
-  String get token => '${key.keyId}:$ctrl:$shift:$alt:$meta:${extraKey?.keyId}';
+  String get token =>
+      '${modifierKey(key) ? 'modifiers' : shortcutKey(key).keyId}:$ctrl:$shift:$alt:$meta:${extraKey == null ? null : shortcutKey(extraKey!).keyId}';
   EditorChord withAlt() => EditorChord(
     key,
     ctrl: ctrl,
@@ -57,32 +66,36 @@ class EditorChord {
     bool meta = false,
     Set<LogicalKeyboardKey>? pressedKeys,
   }) =>
-      event.logicalKey == key &&
+      (shortcutKey(event.logicalKey) == shortcutKey(key) ||
+          modifierKey(key) && modifierKey(event.logicalKey)) &&
       this.ctrl == ctrl &&
       this.shift == shift &&
       this.alt == alt &&
       this.meta == meta &&
       (extraKey == null ||
-          (pressedKeys ?? HardwareKeyboard.instance.logicalKeysPressed)
-              .contains(extraKey));
+          (pressedKeys ?? HardwareKeyboard.instance.logicalKeysPressed).any(
+            (pressed) => shortcutKey(pressed) == shortcutKey(extraKey!),
+          ));
   String get label => [
     if (ctrl) 'Ctrl',
     if (meta) 'Win',
     if (alt) 'Alt',
     if (shift) 'Shift',
     if (extraKey != null) EditorChord(extraKey!).label,
-    switch (key) {
-      LogicalKeyboardKey.arrowLeft => '←',
-      LogicalKeyboardKey.arrowRight => '→',
-      LogicalKeyboardKey.arrowUp => '↑',
-      LogicalKeyboardKey.arrowDown => '↓',
-      LogicalKeyboardKey.space => 'Space',
-      LogicalKeyboardKey.enter => 'Enter',
-      LogicalKeyboardKey.pageUp => 'PageUp',
-      LogicalKeyboardKey.pageDown => 'PageDown',
-      LogicalKeyboardKey.home => 'Home',
-      _ => key.keyLabel.toUpperCase(),
-    },
+    if (!modifierKey(key))
+      switch (key) {
+        LogicalKeyboardKey.arrowLeft => '←',
+        LogicalKeyboardKey.arrowRight => '→',
+        LogicalKeyboardKey.arrowUp => '↑',
+        LogicalKeyboardKey.arrowDown => '↓',
+        LogicalKeyboardKey.space => 'Space',
+        LogicalKeyboardKey.tab => 'Tab',
+        LogicalKeyboardKey.enter => 'Enter',
+        LogicalKeyboardKey.pageUp => 'PageUp',
+        LogicalKeyboardKey.pageDown => 'PageDown',
+        LogicalKeyboardKey.home => 'Home',
+        _ => key.keyLabel.toUpperCase(),
+      },
   ].join(' + ');
   Map<String, dynamic> toJson() => {
     'key': key.keyId,
@@ -95,7 +108,7 @@ class EditorChord {
   static EditorChord? fromJson(Object? raw) {
     if (raw is! Map || raw['key'] is! int) return null;
     final key = LogicalKeyboardKey.findKeyByKeyId(raw['key']);
-    if (key == null || modifierKey(key) || key == LogicalKeyboardKey.escape) {
+    if (key == null || key == LogicalKeyboardKey.escape) {
       return null;
     }
     return EditorChord(
@@ -110,6 +123,21 @@ class EditorChord {
     );
   }
 }
+
+// Number-row and numeric-keypad digits represent the same shortcut.
+LogicalKeyboardKey shortcutKey(LogicalKeyboardKey key) => switch (key) {
+  LogicalKeyboardKey.numpad0 => LogicalKeyboardKey.digit0,
+  LogicalKeyboardKey.numpad1 => LogicalKeyboardKey.digit1,
+  LogicalKeyboardKey.numpad2 => LogicalKeyboardKey.digit2,
+  LogicalKeyboardKey.numpad3 => LogicalKeyboardKey.digit3,
+  LogicalKeyboardKey.numpad4 => LogicalKeyboardKey.digit4,
+  LogicalKeyboardKey.numpad5 => LogicalKeyboardKey.digit5,
+  LogicalKeyboardKey.numpad6 => LogicalKeyboardKey.digit6,
+  LogicalKeyboardKey.numpad7 => LogicalKeyboardKey.digit7,
+  LogicalKeyboardKey.numpad8 => LogicalKeyboardKey.digit8,
+  LogicalKeyboardKey.numpad9 => LogicalKeyboardKey.digit9,
+  _ => key,
+};
 
 bool modifierKey(LogicalKeyboardKey key) => {
   LogicalKeyboardKey.controlLeft,
@@ -149,6 +177,7 @@ EditorAction baseNudgeAction(EditorAction action) => switch (action) {
 String editorActionLabel(EditorAction a) => switch (a) {
   EditorAction.play => '播放 / 暂停',
   EditorAction.confirm => '确认当前选点',
+  EditorAction.save => '保存歌曲配置',
   EditorAction.undo => '撤销',
   EditorAction.beatBack => '后退 1 拍',
   EditorAction.beatForward => '前进 1 拍',
@@ -162,6 +191,13 @@ String editorActionLabel(EditorAction a) => switch (a) {
   EditorAction.suggestionNext => '精修：下一条建议',
   EditorAction.restoreSaved => '精修：回到已保存配置',
   EditorAction.assign => '分配至电台',
+  EditorAction.manualTd => '人工选点：TD',
+  EditorAction.manualPd => '人工选点：PD',
+  EditorAction.manualTl => '人工选点：TL',
+  EditorAction.manualPl => '人工选点：PL',
+  EditorAction.markPlayback => '精修：取当前播放位置',
+  EditorAction.toggleSnap => '精修：切换磁吸 / 自由放置',
+  EditorAction.freePlace => '精修：按住自由放置',
   EditorAction.loopBeatBack => '循环两端：后退 1 拍',
   EditorAction.loopBeatForward => '循环两端：前进 1 拍',
   EditorAction.loopTenBack => '循环两端：减少 10ms',
@@ -173,6 +209,7 @@ Map<EditorAction, EditorChord> defaultEditorShortcuts() {
   final result = <EditorAction, EditorChord>{
     EditorAction.play: const EditorChord(LogicalKeyboardKey.space),
     EditorAction.confirm: const EditorChord(LogicalKeyboardKey.enter),
+    EditorAction.save: const EditorChord(LogicalKeyboardKey.keyS, ctrl: true),
     EditorAction.undo: const EditorChord(LogicalKeyboardKey.keyZ, ctrl: true),
     EditorAction.beatBack: const EditorChord(LogicalKeyboardKey.arrowLeft),
     EditorAction.beatForward: const EditorChord(LogicalKeyboardKey.arrowRight),
@@ -194,12 +231,10 @@ Map<EditorAction, EditorChord> defaultEditorShortcuts() {
     ),
     EditorAction.previous: const EditorChord(
       LogicalKeyboardKey.arrowUp,
-      ctrl: true,
       shift: true,
     ),
     EditorAction.next: const EditorChord(
       LogicalKeyboardKey.arrowDown,
-      ctrl: true,
       shift: true,
     ),
     EditorAction.suggestionPrevious: const EditorChord(
@@ -211,6 +246,28 @@ Map<EditorAction, EditorChord> defaultEditorShortcuts() {
       ctrl: true,
     ),
     EditorAction.assign: const EditorChord(LogicalKeyboardKey.keyD, ctrl: true),
+    EditorAction.manualTd: const EditorChord(
+      LogicalKeyboardKey.digit1,
+      ctrl: true,
+    ),
+    EditorAction.manualPd: const EditorChord(
+      LogicalKeyboardKey.digit2,
+      ctrl: true,
+    ),
+    EditorAction.manualTl: const EditorChord(
+      LogicalKeyboardKey.digit3,
+      ctrl: true,
+    ),
+    EditorAction.manualPl: const EditorChord(
+      LogicalKeyboardKey.digit4,
+      ctrl: true,
+    ),
+    EditorAction.markPlayback: const EditorChord(LogicalKeyboardKey.tab),
+    EditorAction.freePlace: const EditorChord(LogicalKeyboardKey.keyZ),
+    EditorAction.toggleSnap: const EditorChord(
+      LogicalKeyboardKey.keyZ,
+      shift: true,
+    ),
     EditorAction.restoreSaved: const EditorChord(
       LogicalKeyboardKey.keyH,
       ctrl: true,
@@ -301,7 +358,16 @@ String? shortcutConflict(Map<EditorAction, EditorChord> bindings) {
     }
   }
   for (final e in bindings.entries) {
-    if (e.value.key == LogicalKeyboardKey.escape || modifierKey(e.value.key)) {
+    final modifierOnly = modifierKey(e.value.key);
+    final modifierCount = [
+      e.value.ctrl,
+      e.value.alt,
+      e.value.shift,
+      e.value.meta,
+    ].where((value) => value).length;
+    if (e.value.key == LogicalKeyboardKey.escape ||
+        modifierOnly &&
+            (e.key != EditorAction.toggleSnap || modifierCount < 2)) {
       return 'Esc 保留用于返回；不能只使用修饰键。';
     }
     final chord = e.value;
@@ -339,7 +405,68 @@ class EditorShortcutController
                 chord.ctrl &&
                 !chord.shift &&
                 !chord.alt;
-            if (!oldNavigationDefault && !oldRestoreDefault) loaded[a] = chord;
+            final previousDefault = switch (a) {
+              EditorAction.previous => const EditorChord(
+                LogicalKeyboardKey.arrowUp,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.next => const EditorChord(
+                LogicalKeyboardKey.arrowDown,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.manualTd => const EditorChord(
+                LogicalKeyboardKey.digit1,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.manualPd => const EditorChord(
+                LogicalKeyboardKey.digit2,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.manualTl => const EditorChord(
+                LogicalKeyboardKey.digit3,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.manualPl => const EditorChord(
+                LogicalKeyboardKey.digit4,
+                ctrl: true,
+                shift: true,
+              ),
+              EditorAction.markPlayback => const EditorChord(
+                LogicalKeyboardKey.keyM,
+                ctrl: true,
+              ),
+              EditorAction.toggleSnap => const EditorChord(
+                LogicalKeyboardKey.altLeft,
+                alt: true,
+                shift: true,
+              ),
+              _ => null,
+            };
+            final oldEditorDefault =
+                (prefs.getInt('editor.shortcuts.version') ?? 1) < 8 &&
+                chord.token == previousDefault?.token;
+            final previousGroupKey = switch (a) {
+              EditorAction.manualTd => LogicalKeyboardKey.digit1,
+              EditorAction.manualPd => LogicalKeyboardKey.digit2,
+              EditorAction.manualTl => LogicalKeyboardKey.digit3,
+              EditorAction.manualPl => LogicalKeyboardKey.digit4,
+              _ => null,
+            };
+            final oldGroupDefault =
+                (prefs.getInt('editor.shortcuts.version') ?? 1) < 9 &&
+                previousGroupKey != null &&
+                chord.token == EditorChord(previousGroupKey, shift: true).token;
+            if (!oldNavigationDefault &&
+                !oldRestoreDefault &&
+                !oldEditorDefault &&
+                !oldGroupDefault) {
+              loaded[a] = chord;
+            }
           }
         }
         final modifier = readLoopModifier(prefs);
@@ -372,7 +499,7 @@ class EditorShortcutController
     if (problem != null) throw FormatException(problem);
     prefs.setString('editor.loopModifier', modifier);
     state = Map.unmodifiable(value);
-    prefs.setInt('editor.shortcuts.version', 6);
+    prefs.setInt('editor.shortcuts.version', 9);
     prefs.setString(
       'editor.shortcuts.v1',
       jsonEncode({for (final e in value.entries) e.key.name: e.value.toJson()}),

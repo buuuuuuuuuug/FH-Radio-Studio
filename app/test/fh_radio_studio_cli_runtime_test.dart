@@ -320,9 +320,10 @@ void main() {
   });
 
   test('active CLI processes can be cancelled globally', () async {
-    final repoRoot = Directory.systemTemp.createTempSync(
-      'fh_radio_studio_uv_global_cancel_',
-    );
+    final fixtureRoot = Directory(
+      '${Directory.current.path}/build/cli-fixtures',
+    )..createSync(recursive: true);
+    final repoRoot = fixtureRoot.createTempSync('global-cancel-');
     addTearDown(() async {
       await FhRadioStudioCli.killActiveProcesses();
       if (repoRoot.existsSync()) {
@@ -337,7 +338,18 @@ void main() {
     );
     if (Platform.isWindows) {
       await fakeUv.writeAsString(
-        '@echo off\r\necho started\r\nping -n 30 127.0.0.1 >nul\r\necho done\r\nexit /b 0\r\n',
+        '@echo off\r\n'
+        'powershell -NoProfile -Command "'
+        '\$si = [System.Diagnostics.ProcessStartInfo]::new(); '
+        '\$si.FileName = [IO.Path]::Combine(\$env:SystemRoot, \'System32\', \'ping.exe\'); '
+        '\$si.WorkingDirectory = \$env:SystemRoot; '
+        '\$si.Arguments = \'-n 30 127.0.0.1\'; '
+        '\$si.UseShellExecute = \$false; \$si.CreateNoWindow = \$true; '
+        '\$si.RedirectStandardOutput = \$true; '
+        '\$child = [System.Diagnostics.Process]::Start(\$si); '
+        '[Console]::WriteLine(\'started-child:\' + \$child.Id); '
+        '\$child.StandardOutput.ReadToEnd() | Out-Null; \$child.WaitForExit()"\r\n'
+        'echo done\r\nexit /b 0\r\n',
       );
     } else {
       await fakeUv.writeAsString(
@@ -365,21 +377,73 @@ void main() {
     );
     final cli = FhRadioStudioCli(repoRoot: repoRoot.path, uvRuntime: runtime);
     final started = Completer<void>();
+    int? childPid;
     final runFuture = cli.runBase(
       ['status'],
       onStdout: (line) {
-        if (line.contains('started') && !started.isCompleted) {
+        if (started.isCompleted) return;
+        if (Platform.isWindows && line.startsWith('started-child:')) {
+          childPid = int.tryParse(line.substring('started-child:'.length));
+          if (childPid != null) started.complete();
+        } else if (!Platform.isWindows && line == 'started') {
           started.complete();
         }
       },
     );
 
-    await started.future.timeout(const Duration(seconds: 5));
+    await Future.any([
+      started.future,
+      runFuture.then<void>(
+        (result) => throw StateError(
+          'CLI exited before starting its child: ${result.stderr} ${result.stdout}',
+        ),
+      ),
+    ]).timeout(const Duration(seconds: 5));
     expect(FhRadioStudioCli.hasActiveProcesses, isTrue);
 
     await FhRadioStudioCli.killActiveProcesses();
     final result = await runFuture.timeout(const Duration(seconds: 10));
 
+    expect(result.cancelled, isTrue);
+    expect(result.ok, isFalse);
+    expect(FhRadioStudioCli.hasActiveProcesses, isFalse);
+    if (Platform.isWindows) {
+      expect(childPid, isNotNull);
+      final child = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        'Get-Process -Id $childPid -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id',
+      ]);
+      expect(
+        '${child.stdout}'.trim(),
+        isEmpty,
+        reason:
+            'Cancellation must stop descendants as well as the uv launcher.',
+      );
+    }
+  });
+
+  test('a pre-cancelled request never starts its CLI process', () async {
+    final repoRoot = Directory.systemTemp.createTempSync('fh-cli-pre-cancel-');
+    addTearDown(() => repoRoot.deleteSync(recursive: true));
+    final runtime = UvRuntime(
+      uvExecutable: '${repoRoot.path}/must-not-be-started',
+      appRoot: repoRoot.path,
+      projectRoot: repoRoot.path,
+      toolchainHome: '${repoRoot.path}/toolchain',
+      projectEnvironment: '${repoRoot.path}/env',
+      cacheDir: '${repoRoot.path}/cache',
+      audioToolsDir: '${repoRoot.path}/audio',
+      aiModelDir: '${repoRoot.path}/models',
+      mode: 'dev',
+      torchExtra: 'torch-cpu',
+    );
+    final token = CliCancellationToken();
+    await token.cancel();
+    final result = await FhRadioStudioCli(
+      repoRoot: repoRoot.path,
+      uvRuntime: runtime,
+    ).runBase(['status'], cancellationToken: token);
     expect(result.cancelled, isTrue);
     expect(result.ok, isFalse);
     expect(FhRadioStudioCli.hasActiveProcesses, isFalse);

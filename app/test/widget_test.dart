@@ -1003,7 +1003,18 @@ void main() {
     tester.view.physicalSize = const Size(2048, 1100);
 
     final repoRoot = p.dirname(p.current);
-    final projectDir = p.join(repoRoot, 'test', 'project', 'cli-full-flow');
+    final tempRoot = Directory.systemTemp.createTempSync(
+      'latest-package-widget-',
+    );
+    addTearDown(() => tempRoot.deleteSync(recursive: true));
+    final projectDir = p.join(tempRoot.path, 'project');
+    const original =
+        '<RadioInfo><RadioStations><RadioStation Number="4" Name="Horizon XS"><SampleList Type="Track"><Sample SoundName="slot1" SampleLength="48000" SampleRate="48000" DisplayName="Original Song" Artist="Forza" /></SampleList><PlayList Type="FreeRoam"><Entry Name="slot1" /></PlayList><PlayList Type="Event"><Entry Name="slot1" /></PlayList></RadioStation></RadioStations></RadioInfo>';
+    _writeIntegrityFixture(
+      projectDir,
+      gameBytes: original,
+      packageBytes: original.replaceAll('Original Song', 'Full Flow Test'),
+    );
     SharedPreferences.setMockInitialValues({
       _projectDirKey: projectDir,
       'rm.studio.repoRoot': repoRoot,
@@ -1030,6 +1041,13 @@ void main() {
     expect(find.text('分场景编辑'), findsOneWidget);
     expect(find.text('统一写入漫游和比赛'), findsNothing);
     expect(find.text('Full Flow Test'), findsWidgets);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(PlaylistScreen)),
+    );
+    expect(
+      container.read(playlistCatalogProvider).origin,
+      PlaylistCatalogOrigin.package,
+    );
   });
 
   testWidgets(
@@ -1412,7 +1430,7 @@ void main() {
         freeRoamTracks: {'R5': baselineTracks},
         eventTracks: {'R5': baselineTracks},
       );
-      const plan = PlaylistPlan(
+      final plan = PlaylistPlan(
         assignments: {},
         builtinTargets: {'R5|FreeRoam', 'R5|Event'},
       );

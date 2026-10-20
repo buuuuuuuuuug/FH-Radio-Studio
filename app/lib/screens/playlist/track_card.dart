@@ -1,3 +1,4 @@
+import 'playlist_draggable.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 
@@ -95,7 +96,7 @@ class _TrackCardState extends State<TrackCard> {
     final down = _selectionDown;
     _selectionDown = null;
     if (down != null &&
-        (event.position - down).distance < 10 &&
+        (event.position - down).distance < playlistDragDistance &&
         (widget.selectionMode || _controlAtDown || _shiftAtDown)) {
       _select();
     }
@@ -108,6 +109,7 @@ class _TrackCardState extends State<TrackCard> {
     final rm = context.rm;
     final locked = widget.locked;
     final modded = widget.custom || !locked;
+    final canEdit = !locked && widget.onOpenEditor != null;
     final badges = _badges(rm);
 
     final Color bg;
@@ -137,31 +139,30 @@ class _TrackCardState extends State<TrackCard> {
       onPointerUp: _selectOnRelease,
       onPointerMove: (event) {
         if (_selectionDown != null &&
-            (event.position - _selectionDown!).distance >= 10) {
+            (event.position - _selectionDown!).distance >=
+                playlistDragDistance) {
           _selectionDown = null;
         }
       },
       onPointerCancel: (_) => _selectionDown = null,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onDoubleTap: widget.selectionMode || widget.onOpenEditor == null
+        onDoubleTap: widget.selectionMode || !canEdit
             ? null
             : () {
                 if (!_controlAtDown && !_shiftAtDown) widget.onOpenEditor!();
               },
         child: Tooltip(
-          message: widget.onOpenEditor == null
+          message: locked
+              ? ''
+              : widget.onOpenEditor == null
               ? (widget.custom ? '曲目当前不可编辑' : '原版曲目没有本地编辑配置')
               : (widget.onSelect == null
                     ? '双击进入编辑；拖动可调整排序'
                     : '双击编辑 · Ctrl 多选 · Shift 连选'),
           waitDuration: const Duration(milliseconds: 450),
           child: MouseRegion(
-            cursor: locked
-                ? (widget.onOpenEditor == null
-                      ? SystemMouseCursors.basic
-                      : SystemMouseCursors.click)
-                : SystemMouseCursors.grab,
+            cursor: locked ? SystemMouseCursors.basic : SystemMouseCursors.grab,
             onEnter: (_) => setState(() => _hover = true),
             onExit: (_) => setState(() => _hover = false),
             child: Opacity(

@@ -403,6 +403,17 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
               : (state.track.bpm > 0 || state.saved)
               ? _genBeats(waveform.durationSec, state.ai.bpm)
               : const [],
+          segments: state.ai.segments.isNotEmpty
+              ? state.ai.segments
+              : [
+                  for (final segment in waveform.segments)
+                    if (segment.end > segment.start)
+                      Segment(
+                        start: segment.start,
+                        end: segment.end,
+                        label: segment.label,
+                      ),
+                ],
           sourceSampleRate: waveform.sampleRate,
           sourceSamples: waveform.samples,
         ),
@@ -412,6 +423,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
           durationSec: waveform.durationSec,
           waveformPeaks: state.ai.waveformPeaks,
           beats: state.ai.beats,
+          segments: state.ai.segments,
           sourceSampleRate: waveform.sampleRate,
           sourceSamples: waveform.samples,
         ),
@@ -641,6 +653,9 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
   void seekRelative(double deltaSec) {
     setPlayhead(state.playhead + deltaSec);
   }
+
+  void setActiveGroup(GroupKind kind) =>
+      state = state.copyWith(activeGroup: kind);
 
   void jumpToSegment(int index) {
     if (index < 0 || index >= state.ai.segments.length) return;

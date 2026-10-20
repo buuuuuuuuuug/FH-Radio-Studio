@@ -27,6 +27,7 @@ class PageWidthControl extends ConsumerWidget {
         : options.width.clamp(minimum, available);
     final rm = context.rm;
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         LayoutBuilder(
@@ -63,17 +64,20 @@ class PageWidthControl extends ConsumerWidget {
             ],
           ),
         ),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 2,
-            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-          ),
-          child: Slider(
-            value: value,
-            min: minimum,
-            max: math.max(minimum, available),
-            activeColor: rm.accent.base,
-            onChanged: available <= minimum ? null : ctl.setWidth,
+        SizedBox(
+          height: 28,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+            ),
+            child: Slider(
+              value: value,
+              min: minimum,
+              max: math.max(minimum, available),
+              activeColor: rm.accent.base,
+              onChanged: available <= minimum ? null : ctl.setWidth,
+            ),
           ),
         ),
       ],
@@ -150,6 +154,7 @@ class ManualRefineWidthControl extends ConsumerWidget {
     final minimum = math.min(860.0, available);
     final value = options.manualRefineWidth.clamp(minimum, available);
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
@@ -167,18 +172,21 @@ class ManualRefineWidthControl extends ConsumerWidget {
             ),
           ],
         ),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 2,
-            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-          ),
-          child: Slider(
-            key: const ValueKey('manual-refine-width-slider'),
-            value: value,
-            min: minimum,
-            max: available,
-            activeColor: rm.accent.base,
-            onChanged: available <= minimum ? null : ctl.setManualRefineWidth,
+        SizedBox(
+          height: 28,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+            ),
+            child: Slider(
+              key: const ValueKey('manual-refine-width-slider'),
+              value: value,
+              min: minimum,
+              max: available,
+              activeColor: rm.accent.base,
+              onChanged: available <= minimum ? null : ctl.setManualRefineWidth,
+            ),
           ),
         ),
       ],

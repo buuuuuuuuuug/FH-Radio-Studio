@@ -220,7 +220,7 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-  testWidgets('sync and manual-only controls share one row at desktop widths', (
+  testWidgets('sync and expansion controls share one row at desktop widths', (
     tester,
   ) async {
     final f = await fixture();
@@ -238,7 +238,7 @@ void main() {
     );
     expect(
       tester.getTopLeft(find.text('PL 自动同步 TL')).dy,
-      tester.getTopLeft(find.text('电台扩容')).dy,
+      tester.getTopLeft(find.text('电台扩容 · 实验功能')).dy,
     );
     expect(tester.takeException(), isNull);
   });

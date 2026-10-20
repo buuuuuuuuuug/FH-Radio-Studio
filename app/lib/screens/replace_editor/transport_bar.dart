@@ -1,7 +1,6 @@
 import 'editor_timecode.dart';
 import 'package:flutter/material.dart';
 
-import '../../domain/replacement_models.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
 import '../../theme/tokens.dart';
@@ -39,7 +38,6 @@ class TransportBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final rm = context.rm;
     final ai = state.ai;
-    final currentSeg = segmentAt(ai.segments, state.playhead);
     final durationText = ai.durationSec > 0
         ? formatEditorTimecode(ai.durationSec)
         : '--:--';
@@ -85,47 +83,30 @@ class TransportBar extends StatelessWidget {
             ),
           ];
           final details = <Widget>[
-            if (!compact) ...[
+            if (!compact && c.maxWidth >= 480)
               Text(
-                aiPending ? '段：分析中' : '段：${currentSeg.label}',
+                aiPending ? 'BPM --' : 'BPM ${ai.bpm.toStringAsFixed(1)}',
                 style: RmText.mono(11, color: rm.fg3),
               ),
-              const SizedBox(width: 14),
-            ],
-            Text(
-              aiPending ? 'BPM --' : 'BPM ${ai.bpm.toStringAsFixed(1)}',
-              style: RmText.mono(11, color: rm.fg3),
-            ),
-            if (!compact) ...[
+            if (!compact && c.maxWidth >= 480) ...[
               const SizedBox(width: 14),
               _kbd(context, 'Space'),
             ],
             if (trailing != null) ...[const SizedBox(width: 12), trailing!],
           ];
-          if (!compact && c.maxWidth < 800) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    ...controls.take(controls.length - 1),
-                    Flexible(child: controls.last),
-                  ],
+          return Row(
+            children: [
+              ...controls.take(controls.length - 1),
+              Expanded(
+                child: Align(
+                  heightFactor: 1,
+                  alignment: Alignment.centerLeft,
+                  child: FittedBox(fit: BoxFit.scaleDown, child: controls.last),
                 ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Wrap(
-                    spacing: 14,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: details.where((w) => w is! SizedBox).toList(),
-                  ),
-                ),
-              ],
-            );
-          }
-          return Row(children: [...controls, const Spacer(), ...details]);
+              ),
+              ...details,
+            ],
+          );
         },
       ),
     );

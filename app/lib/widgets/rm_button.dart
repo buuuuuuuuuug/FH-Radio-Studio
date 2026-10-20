@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/delayed_repeat.dart';
 
 import '../theme/app_theme.dart';
@@ -67,6 +68,7 @@ class RmButton extends StatefulWidget {
 class _RmButtonState extends State<RmButton> {
   bool _hover = false;
   bool _pressed = false;
+  bool _focusHighlight = false;
   final _repeat = DelayedRepeat();
   bool _didRepeat = false;
   @override
@@ -80,6 +82,10 @@ class _RmButtonState extends State<RmButton> {
     super.didUpdateWidget(oldWidget);
     if (widget.disabled || widget.onPressed == null || !widget.repeat) {
       _repeat.stop();
+    }
+    if (widget.disabled || widget.onPressed == null) {
+      _pressed = false;
+      _hover = false;
     }
   }
 
@@ -189,7 +195,10 @@ class _RmButtonState extends State<RmButton> {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(RmTokens.rSm),
-        border: Border.all(color: border, width: 1),
+        border: Border.all(
+          color: _focusHighlight && !disabled ? rm.accent.base : border,
+          width: 1,
+        ),
       ),
       child: IconTheme.merge(
         data: IconThemeData(color: fg, size: fontSize),
@@ -230,13 +239,13 @@ class _RmButtonState extends State<RmButton> {
             ? null
             : (_) {
                 _repeat.stop();
-                setState(() => _pressed = false);
+                if (_pressed) setState(() => _pressed = false);
               },
         onTapCancel: disabled
             ? null
             : () {
                 _repeat.stop();
-                setState(() => _pressed = false);
+                if (_pressed) setState(() => _pressed = false);
               },
         onTap: disabled
             ? null
@@ -250,6 +259,28 @@ class _RmButtonState extends State<RmButton> {
     if (widget.tooltip != null) {
       gestures = Tooltip(message: widget.tooltip!, child: gestures);
     }
-    return gestures;
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: !disabled,
+      child: FocusableActionDetector(
+        enabled: !disabled,
+        onShowFocusHighlight: (value) =>
+            setState(() => _focusHighlight = value),
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              if (!widget.disabled) widget.onPressed?.call();
+              return null;
+            },
+          ),
+        },
+        child: gestures,
+      ),
+    );
   }
 }

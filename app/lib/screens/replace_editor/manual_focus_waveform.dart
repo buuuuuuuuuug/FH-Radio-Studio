@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'editor_timecode.dart';
 import '../../widgets/waveform_zoom_gesture.dart';
 import 'package:flutter/material.dart';
@@ -7,7 +8,6 @@ import '../../domain/replacement_models.dart';
 import '../../domain/waveform_envelope.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
-import '../../theme/tokens.dart';
 
 /// 精修台里的一个可放置端点（单点组只有一个；循环组有 A / B 两个）。
 class FocusHandle {
@@ -50,10 +50,11 @@ class ManualFocusWaveform extends StatefulWidget {
     required this.locked,
     required this.onPlace,
     this.playhead,
-    this.canvasHeight = 180,
+    this.canvasHeight = 132,
     this.windowStart = 0,
     this.windowEnd,
     this.onZoom,
+    this.onQuickConfirm,
   });
 
   final WaveformBars bars;
@@ -63,7 +64,7 @@ class ManualFocusWaveform extends StatefulWidget {
   final Color accent;
   final List<FocusHandle> handles;
 
-  /// 是否处于自由放置（按住 Alt）：影响光标提示。
+  /// 是否处于自由放置（按住自由放置快捷键）：影响光标提示。
   final bool free;
 
   /// 锁定后波形拒绝放点。
@@ -76,6 +77,7 @@ class ManualFocusWaveform extends StatefulWidget {
   final double windowStart;
   final double? windowEnd;
   final ValueChanged<double>? onZoom;
+  final VoidCallback? onQuickConfirm;
 
   /// 放点回调。[isMove] 区分按下（挑最近端点）与拖动（沿用当前端点）。
   final void Function(double seconds, {required bool isMove}) onPlace;
@@ -101,6 +103,11 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
 
   void _down(PointerDownEvent e) {
     if (widget.locked) return;
+    if (e.buttons == 2 && HardwareKeyboard.instance.isControlPressed) {
+      widget.onQuickConfirm?.call();
+      return;
+    }
+    if (e.buttons != 1) return;
     _dragging = true;
     widget.onPlace(_timeAt(e.localPosition.dx), isMove: false);
   }
@@ -125,14 +132,6 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (widget.duration > 0 &&
-            widget.segments.any(
-              (segment) =>
-                  segment.end > widget.windowStart && segment.start < _end,
-            )) ...[
-          _segmentLane(rm),
-          const SizedBox(height: 6),
-        ],
         WaveformZoomGesture(
           onZoom: widget.onZoom,
           child: SizedBox(
@@ -186,58 +185,6 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
         const SizedBox(height: 6),
         _timeAxis(rm),
       ],
-    );
-  }
-
-  // --- 段落泳道 ----------------------------------------------------------
-  Widget _segmentLane(RmTheme rm) {
-    if (widget.duration <= 0 || widget.segments.isEmpty) {
-      return const SizedBox(height: 18);
-    }
-    return SizedBox(
-      height: 18,
-      child: Row(
-        children: [
-          for (final s in widget.segments)
-            if (s.end > widget.windowStart && s.start < _end)
-              Expanded(
-                flex:
-                    (((math.min(s.end, _end) -
-                                    math.max(s.start, widget.windowStart)) /
-                                _span) *
-                            1000)
-                        .clamp(1, 1000)
-                        .round(),
-                child: _segBlock(rm, s),
-              ),
-        ],
-      ),
-    );
-  }
-
-  Widget _segBlock(RmTheme rm, Segment s) {
-    final (bg, fg) = _segColors(rm, s.label);
-    final wide =
-        (math.min(s.end, _end) - math.max(s.start, widget.windowStart)) /
-            _span >
-        0.06;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 1),
-      child: Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(3),
-        ),
-        child: wide
-            ? Text(
-                s.label,
-                maxLines: 1,
-                overflow: TextOverflow.clip,
-                style: RmText.mono(9.5, color: fg),
-              )
-            : null,
-      ),
     );
   }
 
@@ -336,19 +283,6 @@ class _ManualFocusWaveformState extends State<ManualFocusWaveform> {
 }
 
 String _shortLabel(double t) => formatEditorTimecode(t);
-
-/// 段落泳道配色 —— intro/outro 中性、verse 蓝、chorus 绿、bridge 琥珀。
-(Color, Color) _segColors(RmTheme rm, String label) {
-  final l = label.trim().toLowerCase();
-  if (l.contains('verse')) return (RmTokens.segVerseBg, RmTokens.segVerseFg);
-  if (l.contains('chorus')) return (RmTokens.segChorusBg, RmTokens.segChorusFg);
-  if (l.contains('bridge')) return (RmTokens.segBridgeBg, RmTokens.segBridgeFg);
-  if (l.contains('drop') || l.contains('hook')) {
-    return (RmTokens.segChorusBg, RmTokens.segChorusFg);
-  }
-  // intro / outro / 其它 → 中性
-  return (RmTokens.segIntroBg, rm.fg3);
-}
 
 class _FocusWavePainter extends CustomPainter {
   _FocusWavePainter({

@@ -5464,90 +5464,90 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
               overline: '写入前检查',
               icon: 'export',
             ),
-            Padding(
-              padding: const EdgeInsets.all(22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '选择电台包的写入位置，然后确认下面三项。',
-                    style: RmText.sans(13, color: rm.fg2, height: 1.55),
-                  ),
-                  const SizedBox(height: 14),
-                  Material(
-                    color: Colors.transparent,
-                    child: RadioGroup<GameDeploymentTarget>(
-                      groupValue: _target,
-                      onChanged: (value) {
-                        if (value != null) setState(() => _target = value);
-                      },
-                      child: const Column(
+            Flexible(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '选择电台包的写入位置，然后确认下面三项。',
+                        style: RmText.sans(13, color: rm.fg2, height: 1.55),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
                         children: [
-                          RadioListTile<GameDeploymentTarget>(
-                            value: GameDeploymentTarget.mediapc,
-                            title: Text('mediapc（默认）'),
-                            subtitle: Text('写入覆盖目录，保留 media 中现有文件'),
-                            dense: true,
+                          Expanded(
+                            child: _targetOption(
+                              context,
+                              GameDeploymentTarget.mediapc,
+                              'mediapc（默认）',
+                              '不覆盖游戏原文件，不受更新影响',
+                            ),
                           ),
-                          RadioListTile<GameDeploymentTarget>(
-                            value: GameDeploymentTarget.media,
-                            title: Text('media（覆盖原文件）'),
-                            subtitle: Text('直接替换游戏原目录中的电台文件'),
-                            dense: true,
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _targetOption(
+                              context,
+                              GameDeploymentTarget.media,
+                              'media（覆盖原文件）',
+                              '覆盖游戏原文件，游戏更新可能恢复',
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: rm.raised,
-                      border: Border.all(color: rm.border),
-                      borderRadius: BorderRadius.circular(RmTokens.rMd),
-                    ),
-                    child: Column(
-                      children: [
-                        _ChecklistItem(
-                          label: 'FH6 已退出（包括 Steam 后台 / 云同步队列）',
-                          value: _exit,
-                          onChanged: (v) => setState(() => _exit = v),
+                      const SizedBox(height: 14),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: rm.raised,
+                          border: Border.all(color: rm.border),
+                          borderRadius: BorderRadius.circular(RmTokens.rMd),
                         ),
-                        _ChecklistItem(
-                          label: widget.force
-                              ? '确认写入所选准备包，用于测试当前游戏版本'
-                              : '写入的是最近准备好的电台包',
-                          value: _latest,
-                          onChanged: (v) => setState(() => _latest = v),
+                        child: Column(
+                          children: [
+                            _ChecklistItem(
+                              label: 'FH6 已退出（包括 Steam 后台 / 云同步队列）',
+                              value: _exit,
+                              onChanged: (v) => setState(() => _exit = v),
+                            ),
+                            _ChecklistItem(
+                              label: widget.force
+                                  ? '确认写入所选准备包，用于测试当前游戏版本'
+                                  : '写入的是最近准备好的电台包',
+                              value: _latest,
+                              onChanged: (v) => setState(() => _latest = v),
+                            ),
+                            _ChecklistItem(
+                              label: '理解这会修改本地游戏文件，上次写入指纹会在成功后更新',
+                              value: _modify,
+                              onChanged: (v) => setState(() => _modify = v),
+                              last: true,
+                            ),
+                          ],
                         ),
-                        _ChecklistItem(
-                          label: '理解这会修改本地游戏文件，上次写入指纹会在成功后更新',
-                          value: _modify,
-                          onChanged: (v) => setState(() => _modify = v),
-                          last: true,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _ModalFacts(
-                    rows: [
-                      ('写入位置', p.join(s.gameDir, _target.directoryName)),
-                      (
-                        '电台包',
-                        (widget.pending
-                                ? s.pendingPackageDeployDir
-                                : s.lastPackageDeployDir) ??
-                            '还没有准备电台包',
                       ),
-                      ('写入指纹', s.lastAppliedPackageManifest),
-                      (
-                        '受影响文件',
-                        '${math.max(s.fileIntegrity.packageFiles, s.fileIntegrity.checkedFiles)} 个保护文件',
+                      const SizedBox(height: 14),
+                      _ModalFacts(
+                        rows: [
+                          ('写入位置', p.join(s.gameDir, _target.directoryName)),
+                          (
+                            '电台包',
+                            (widget.pending
+                                    ? s.pendingPackageDeployDir
+                                    : s.lastPackageDeployDir) ??
+                                '还没有准备电台包',
+                          ),
+                          ('写入指纹', s.lastAppliedPackageManifest),
+                          (
+                            '受影响文件',
+                            '${math.max(s.fileIntegrity.packageFiles, s.fileIntegrity.checkedFiles)} 个保护文件',
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
+                ),
               ),
             ),
             _ModalFoot(
@@ -5558,6 +5558,64 @@ class _DeployPreflightDialogState extends State<_DeployPreflightDialog> {
               onConfirm: () => Navigator.of(context).pop(_target),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _targetOption(
+    BuildContext context,
+    GameDeploymentTarget target,
+    String title,
+    String subtitle,
+  ) {
+    final rm = context.rm;
+    final selected = _target == target;
+    return Semantics(
+      key: ValueKey('deploy-choice-${target.directoryName}'),
+      selected: selected,
+      button: true,
+      child: Material(
+        color: selected ? rm.accent.bg : rm.raised,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(RmTokens.rMd),
+          side: BorderSide(color: selected ? rm.accent.ring : rm.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: ValueKey('deploy-target-${target.directoryName}'),
+          onTap: () => setState(() => _target = target),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                RmIcon(
+                  selected ? 'check' : 'folder',
+                  size: 16,
+                  color: selected ? rm.accent.base : rm.fg3,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: RmText.sans(
+                          12,
+                          weight: FontWeight.w600,
+                          color: selected ? rm.accent.base : rm.fg,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(subtitle, style: RmText.sans(11, color: rm.fg3)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

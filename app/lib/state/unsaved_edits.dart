@@ -14,11 +14,13 @@ class PendingEdit {
     required this.dirty,
     required this.save,
     required this.discard,
+    this.discardBlockedReason,
   });
   final String label;
   final bool Function() dirty;
   final FutureOr<void> Function() save;
   final void Function() discard;
+  final String? Function()? discardBlockedReason;
 }
 
 class UnsavedEdits {
@@ -31,7 +33,21 @@ class UnsavedEdits {
     bool exiting = false,
     bool switching = false,
   }) {
-    return _pending ??= _confirm(
+    final pending = _pending;
+    if (pending != null) {
+      // A track navigation prompt may cover fewer edits than a window-close
+      // request. Re-check this caller's scope after the active prompt finishes.
+      return pending.then((allowed) {
+        if (!allowed || !context.mounted) return false;
+        return confirm(
+          context,
+          key: key,
+          exiting: exiting,
+          switching: switching,
+        );
+      });
+    }
+    return _pending = _confirm(
       context,
       key: key,
       exiting: exiting,
@@ -45,11 +61,16 @@ class UnsavedEdits {
     required bool exiting,
     required bool switching,
   }) async {
+    if (!context.mounted) return false;
     final edits = [
       for (final e in entries.entries)
         if ((key == null || e.key == key) && e.value.dirty()) e.value,
     ];
     if (edits.isEmpty) return true;
+    final blockedDiscard = [
+      for (final edit in edits)
+        if (edit.discardBlockedReason?.call() case final String reason) reason,
+    ];
     final choice = await showDialog<UnsavedChoice>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -63,9 +84,15 @@ class UnsavedEdits {
           exiting ? '关闭前保存修改？' : (switching ? '切换歌曲前保存修改？' : '存在未保存的修改'),
           style: RmText.sans(15, weight: FontWeight.w600, color: ctx.rm.fg),
         ),
-        content: Text(
-          '${edits.map((e) => e.label).join('、')}尚未保存。',
-          style: RmText.sans(12.5, color: ctx.rm.fg3),
+        content: SizedBox(
+          width: 480,
+          child: Text(
+            [
+              '${edits.map((e) => e.label).join('、')}尚未保存。',
+              ...blockedDiscard,
+            ].join('\n\n'),
+            style: RmText.sans(12.5, color: ctx.rm.fg3),
+          ),
         ),
         actions: [
           RmButton(
@@ -73,7 +100,9 @@ class UnsavedEdits {
             label: exiting ? '取消关闭' : (switching ? '取消切换' : '取消返回'),
           ),
           RmButton(
-            onPressed: () => Navigator.pop(ctx, UnsavedChoice.discard),
+            onPressed: blockedDiscard.isNotEmpty
+                ? null
+                : () => Navigator.pop(ctx, UnsavedChoice.discard),
             label: '放弃更改',
           ),
           RmButton(
@@ -96,9 +125,13 @@ class UnsavedEdits {
       return true;
     } on Object catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${choice == UnsavedChoice.save ? '保存' : '放弃更改'}失败：$e',
+            ),
+          ),
+        );
       }
       return false;
     }

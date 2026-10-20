@@ -1,8 +1,11 @@
-import '../theme/tokens.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../domain/radio_library.dart';
+import '../state/editor_shortcuts.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
+import '../theme/tokens.dart';
+import 'assignment_radio_choice.dart';
 import 'rm_button.dart';
 
 class BatchAssignmentInfo {
@@ -12,9 +15,7 @@ class BatchAssignmentInfo {
     required this.limit,
     required this.replacesBuiltin,
   });
-  final int total;
-  final int added;
-  final int limit;
+  final int total, added, limit;
   final bool replacesBuiltin;
 }
 
@@ -39,127 +40,263 @@ class BatchAssignmentDialog extends StatefulWidget {
 class _BatchAssignmentDialogState extends State<BatchAssignmentDialog> {
   late String _radio = widget.radios.first.code;
   late String _type = widget.initialType;
+  final focus = FocusNode();
+  @override
+  void dispose() {
+    focus.dispose();
+    super.dispose();
+  }
+
+  void confirm() {
+    final radio = widget.radios.firstWhere((r) => r.code == _radio);
+    final info = widget.info(radio, _type);
+    if (info.total > info.limit || info.added == 0) return;
+    Navigator.pop(context, (radio: _radio, type: _type, limit: info.limit));
+  }
+
   @override
   Widget build(BuildContext context) {
     final rm = context.rm;
-    final radio = widget.radios.firstWhere((r) => r.code == _radio);
-    final info = widget.info(radio, _type);
+    final info = widget.info(
+      widget.radios.firstWhere((r) => r.code == _radio),
+      _type,
+    );
     final exceeds = info.total > info.limit;
-    return Theme(
-      data: Theme.of(context).copyWith(
-        colorScheme: Theme.of(context).colorScheme.copyWith(
-          primary: rm.accent.base,
-          onPrimary: rm.accent.onAccent,
-          surface: rm.panel,
-        ),
-      ),
-      child: AlertDialog(
+    return Focus(
+      focusNode: focus,
+      autofocus: true,
+      onKeyEvent: (_, e) {
+        if (e is! KeyDownEvent ||
+            HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isAltPressed ||
+            HardwareKeyboard.instance.isShiftPressed ||
+            HardwareKeyboard.instance.isMetaPressed) {
+          return KeyEventResult.ignored;
+        }
+        if (e.logicalKey == LogicalKeyboardKey.enter) {
+          confirm();
+          return KeyEventResult.handled;
+        }
+        final number = shortcutKey(e.logicalKey).keyLabel;
+        final matches = widget.radios.where((r) => r.code == 'R$number');
+        if (matches.isNotEmpty) {
+          setState(() => _radio = matches.first.code);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Dialog(
+        key: const ValueKey('batch-assignment-dialog'),
+        backgroundColor: rm.panel,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(RmTokens.rLg),
           side: BorderSide(color: rm.border),
         ),
-        backgroundColor: rm.panel,
-        surfaceTintColor: Colors.transparent,
-        title: Text(
-          '分配 ${widget.tracks.length} 首歌曲',
-          style: RmText.sans(15, weight: FontWeight.w600, color: rm.fg),
-        ),
-        content: SizedBox(
-          width: 420,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _radio,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: '目标电台'),
-                  items: [
-                    for (final r in widget.radios)
-                      DropdownMenuItem(
-                        value: r.code,
-                        child: Text(
-                          '${r.code} · ${r.name}',
-                          overflow: TextOverflow.ellipsis,
-                          style: RmText.sans(12.5, color: rm.fg),
-                        ),
+        insetPadding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 560,
+            maxHeight: MediaQuery.sizeOf(context).height - 48,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: rm.accent.bg,
+                        borderRadius: BorderRadius.circular(RmTokens.rSm),
                       ),
+                      child: Icon(
+                        Icons.radio_outlined,
+                        color: rm.accent.base,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '分配 ${widget.tracks.length} 首歌曲',
+                            style: RmText.modalH2(color: rm.fg),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '按 1–9 选择 · 支持小键盘 · Enter 分配 · Esc 取消',
+                            style: RmText.sans(11, color: rm.fg3),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
-                  onChanged: (r) {
-                    if (r != null) setState(() => _radio = r);
-                  },
                 ),
-                if (widget.splitTypes) ...[
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    initialValue: _type,
-                    decoration: const InputDecoration(labelText: '场景'),
-                    items: const [
-                      DropdownMenuItem(value: 'FreeRoam', child: Text('漫游')),
-                      DropdownMenuItem(value: 'Event', child: Text('比赛')),
-                    ],
-                    onChanged: (t) {
-                      if (t != null) setState(() => _type = t);
-                    },
-                  ),
-                ],
-                const SizedBox(height: 14),
-                Text(
-                  '新增 ${info.added} 首 · 分配后 ${info.total} / ${info.limit == 4096 ? '扩容' : info.limit} 首',
-                  style: RmText.sans(12, color: exceeds ? rm.danger : rm.fg2),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  exceeds
-                      ? '超过电台容量，请减少选择或更换电台；本次不会部分分配。'
-                      : (info.added == 0
-                            ? '这些歌曲已在目标电台，无需重复分配。'
-                            : '按列表顺序追加，保留其他电台的分配；目标已有歌曲不重复添加。'),
-                  style: RmText.sans(11.5, color: rm.fg3),
-                ),
-                if (info.replacesBuiltin) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    '该电台将由原版切换为自建曲目。',
-                    style: RmText.sans(11.5, color: rm.warn),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                for (final t in widget.tracks.take(6))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 5),
-                    child: Text(
-                      '${t.title} · ${t.artist}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: RmText.sans(11.5, color: rm.fg3),
+              ),
+              Container(height: 1, color: rm.border),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: rm.raised,
+                            borderRadius: BorderRadius.circular(RmTokens.rSm),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              for (final t in widget.tracks.take(2))
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
+                                  child: Text(
+                                    '${t.title} · ${t.artist}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: RmText.sans(11.5, color: rm.fg2),
+                                  ),
+                                ),
+                              if (widget.tracks.length > 2)
+                                Text(
+                                  '另有 ${widget.tracks.length - 2} 首',
+                                  style: RmText.sans(11, color: rm.fg3),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        if (widget.splitTypes) ...[
+                          Row(
+                            children: [
+                              Text(
+                                '场景',
+                                style: RmText.sans(11.5, color: rm.fg3),
+                              ),
+                              const SizedBox(width: 12),
+                              for (final type in ['FreeRoam', 'Event'])
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: RmButton(
+                                    key: ValueKey('batch-type-$type'),
+                                    label: type == 'Event' ? '比赛' : '漫游',
+                                    size: RmButtonSize.sm,
+                                    variant: _type == type
+                                        ? RmButtonVariant.primary
+                                        : RmButtonVariant.defaultBtn,
+                                    onPressed: () =>
+                                        setState(() => _type = type),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        for (final r in widget.radios) ...[
+                          Builder(
+                            builder: (context) {
+                              final preview = widget.info(r, _type);
+                              return AssignmentRadioChoice(
+                                choiceKey: ValueKey('batch-assign-${r.code}'),
+                                radio: r,
+                                selected: r.code == _radio,
+                                summary:
+                                    '${preview.total} / ${preview.limit == 4096 ? '扩容' : preview.limit}${preview.total > preview.limit ? ' · 超额' : ''}',
+                                summaryColor: preview.total > preview.limit
+                                    ? rm.danger
+                                    : null,
+                                onTap: () => setState(() => _radio = r.code),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 6),
+                        ],
+                      ],
                     ),
                   ),
-                if (widget.tracks.length > 6)
-                  Text(
-                    '另有 ${widget.tracks.length - 6} 首',
-                    style: RmText.sans(11.5, color: rm.fg3),
-                  ),
-              ],
-            ),
+                ),
+              ),
+              Container(height: 1, color: rm.border),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      key: const ValueKey('batch-assign-status'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: exceeds ? rm.dangerBg : rm.raised,
+                        borderRadius: BorderRadius.circular(RmTokens.rSm),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            exceeds
+                                ? Icons.warning_amber_rounded
+                                : Icons.info_outline,
+                            size: 16,
+                            color: exceeds ? rm.danger : rm.fg2,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '新增 ${info.added} 首 · 分配后 ${info.total} / ${info.limit == 4096 ? '扩容' : info.limit} 首\n${exceeds
+                                  ? '超过电台容量，请减少选择或更换电台；本次不会部分分配。'
+                                  : info.added == 0
+                                  ? '这些歌曲已在目标电台，无需重复分配。'
+                                  : info.replacesBuiltin
+                                  ? '该电台将由原版切换为自建曲目。'
+                                  : '按列表顺序追加；目标已有歌曲不重复添加。'}',
+                              style: RmText.sans(
+                                11.5,
+                                color: exceeds ? rm.danger : rm.fg2,
+                                height: 1.45,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        RmButton(
+                          label: '取消',
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                        const SizedBox(width: 8),
+                        RmButton(
+                          key: const ValueKey('batch-assign-confirm'),
+                          label: info.replacesBuiltin ? '切换并分配' : '分配',
+                          variant: RmButtonVariant.primary,
+                          onPressed: exceeds || info.added == 0
+                              ? null
+                              : confirm,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        actions: [
-          RmButton(label: '取消', onPressed: () => Navigator.pop(context)),
-          RmButton(
-            key: const ValueKey('batch-assign-confirm'),
-            label: info.replacesBuiltin ? '切换并分配' : '分配',
-            variant: RmButtonVariant.primary,
-            onPressed: exceeds || info.added == 0
-                ? null
-                : () => Navigator.pop(context, (
-                    radio: radio.code,
-                    type: _type,
-                    limit: info.limit,
-                  )),
-          ),
-        ],
       ),
     );
   }

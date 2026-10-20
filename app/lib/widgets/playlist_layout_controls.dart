@@ -1,3 +1,4 @@
+import 'rm_slider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/layout_options.dart';
@@ -49,7 +50,7 @@ class PlaylistLayoutControls extends ConsumerWidget {
             child: SizedBox(
               height: 32,
               child: styledSlider(
-                Slider(
+                RmSlider(
                   key: const ValueKey('radio-columns-slider'),
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   value: columnStep,
@@ -115,7 +116,7 @@ class PlaylistLayoutControls extends ConsumerWidget {
                 children: [
                   Positioned.fill(
                     child: styledSlider(
-                      Slider(
+                      RmSlider(
                         key: const ValueKey('radio-height-slider'),
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                         value: options.radioHeight,

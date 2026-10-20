@@ -28,11 +28,11 @@ void main() {
       for (final p in [43.0, 50.0, 57.9]) {
         expect(view(p), (start: 40.0, end: 60.0));
       }
-      final next = view(58);
-      expect(next, (start: 54.0, end: 74.0));
+      final next = view(58.1);
+      expect(next, (start: 56.1, end: 76.1));
       expect(view(59, start: next.start, end: next.end), next);
-      expect(view(42), (start: 26.0, end: 46.0));
-      expect(view(150), (start: 146.0, end: 166.0));
+      expect(view(41.9), (start: 23.9, end: 43.9));
+      expect(view(150), (start: 148.0, end: 168.0));
       expect(view(0), (start: 0.0, end: 20.0));
       expect(view(200), (start: 180.0, end: 200.0));
       expect(view(50, start: 0, end: 200), (start: 0.0, end: 200.0));

@@ -1,3 +1,6 @@
+import '../core/playlist_capacity.dart';
+import 'playlist_capacity.dart';
+import 'editor_options.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/playlist_plan.dart';
@@ -17,6 +20,7 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
       dirty: () => mounted && dirty,
       save: save,
       discard: discard,
+      discardBlockedReason: _discardBlockedReason,
     );
     ref.onDispose(() => edits.entries.remove('playlist'));
     ref.listen<String>(studioProvider.select((state) => state.projectDir), (
@@ -33,6 +37,7 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
   String _savedSignature = '';
   PlaylistPlan _saved = const PlaylistPlan.empty();
   bool hasUserPlan = false;
+  bool _savedUserPlan = false;
   final _undo = <({PlaylistPlan plan, bool userPlan})>[];
   final _redo = <({PlaylistPlan plan, bool userPlan})>[];
   int _transactionDepth = 0;
@@ -50,12 +55,14 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
 
   void undo() {
     if (!canUndo) return;
+    _ensureCapacity(_undo.last.plan);
     _redo.add(_entry);
     _restore(_undo.removeLast());
   }
 
   void redo() {
     if (!canRedo) return;
+    _ensureCapacity(_redo.last.plan);
     _undo.add(_entry);
     _restore(_redo.removeLast());
   }
@@ -76,12 +83,15 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
         _undo.add(before);
         if (_undo.length > 100) _undo.removeAt(0);
         _redo.clear();
-        state = PlaylistPlan(
-          assignments: {...state.assignments},
-          builtinTargets: {...state.builtinTargets},
-        );
       }
     }
+  }
+
+  void _ensureCapacity(PlaylistPlan plan, {bool absolute = false}) {
+    if (ref.read(editorOptionsProvider).expansionEnabled) return;
+    ref
+        .read(playlistCapacityPolicyProvider)
+        .requireTransition(state, plan, allowExistingOverflow: !absolute);
   }
 
   void _apply(PlaylistPlan plan) {
@@ -89,11 +99,13 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
       transaction(() => _apply(plan));
       return;
     }
+    _ensureCapacity(plan);
     hasUserPlan = true;
     state = plan;
   }
 
-  bool get dirty => state.encodeForCli() != _savedSignature;
+  bool get dirty =>
+      hasUserPlan != _savedUserPlan || state.encodeForCli() != _savedSignature;
 
   void _resetDraft() {
     _undo.clear();
@@ -108,6 +120,7 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
       hasUserPlan = false;
     }
     _saved = state;
+    _savedUserPlan = hasUserPlan;
     _savedSignature = state.encodeForCli();
   }
 
@@ -126,8 +139,10 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
 
   void save() {
     final plan = hasUserPlan ? state : _stateSeededFromPackage();
+    _ensureCapacity(plan, absolute: true);
     PlaylistPlanStore.write(_projectDir, plan);
     hasUserPlan = true;
+    _savedUserPlan = true;
     _saved = plan;
     _savedSignature = plan.encodeForCli();
     state = PlaylistPlan(
@@ -136,10 +151,21 @@ class PlaylistPlanController extends StateNotifier<PlaylistPlan> {
     );
   }
 
+  String? _discardBlockedReason() {
+    try {
+      _ensureCapacity(_saved);
+      return null;
+    } on PlaylistCapacityException catch (error) {
+      return '已保存的旧播放列表仍超出原始容量：${describeCapacityViolations(error.issues).join('；')}。'
+          '放弃更改会恢复旧列表。请先保存当前播放列表；如需恢复旧列表，请先重新开启电台扩容。';
+    }
+  }
+
   void discard() {
+    _ensureCapacity(_saved);
     _undo.clear();
     _redo.clear();
-    hasUserPlan = File(PlaylistPlanStore.configPath(_projectDir)).existsSync();
+    hasUserPlan = _savedUserPlan;
     state = PlaylistPlan(
       assignments: {..._saved.assignments},
       builtinTargets: {..._saved.builtinTargets},

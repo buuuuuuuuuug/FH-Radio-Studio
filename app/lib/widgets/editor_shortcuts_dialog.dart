@@ -79,8 +79,18 @@ class _ShortcutDialogState extends ConsumerState<_ShortcutDialog> {
           });
           return KeyEventResult.handled;
         }
-        if (modifierKey(event.logicalKey)) return KeyEventResult.handled;
         final h = HardwareKeyboard.instance;
+        if (modifierKey(event.logicalKey) &&
+            (recording != EditorAction.toggleSnap ||
+                [
+                      h.isControlPressed,
+                      h.isShiftPressed,
+                      h.isAltPressed,
+                      h.isMetaPressed,
+                    ].where((v) => v).length <
+                    2)) {
+          return KeyEventResult.handled;
+        }
         final combo = EditorChord(
           event.logicalKey,
           ctrl: h.isControlPressed,

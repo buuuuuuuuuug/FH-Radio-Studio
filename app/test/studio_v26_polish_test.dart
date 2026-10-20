@@ -33,7 +33,7 @@ void main() {
       final dirty = n.state.dirty;
       n.setPlaying(true);
       n.setPlayhead(150);
-      expect(n.state.zoomStart, closeTo(150 - span * .2, 1e-6));
+      expect(n.state.zoomStart, closeTo(150 - span * .1, 1e-6));
       final stationary = (n.state.zoomStart, n.state.zoomEnd);
       n.setPlayhead(151);
       expect((n.state.zoomStart, n.state.zoomEnd), stationary);
@@ -51,7 +51,7 @@ void main() {
       expect(n.state.dirty, dirty);
     },
   );
-  testWidgets('manual waveform follows live playback at the same zoom', (
+  testWidgets('manual waveform ignores main playback and keeps its zoom', (
     t,
   ) async {
     t.view.physicalSize = const Size(1600, 1100);
@@ -87,7 +87,7 @@ void main() {
     final previousStart = wave().windowStart;
     n.setPlayhead(wave().windowEnd! - span * .05);
     await t.pumpAndSettle();
-    expect(wave().windowStart, greaterThan(previousStart));
+    expect(wave().windowStart, previousStart);
     final stationary = (wave().windowStart, wave().windowEnd);
     n.setPlayhead(wave().windowStart + span * .5);
     await t.pumpAndSettle();
@@ -95,7 +95,7 @@ void main() {
     expect(wave().windowEnd! - wave().windowStart, closeTo(span, 1e-6));
     n.setPlayhead(0);
     await t.pumpAndSettle();
-    expect(wave().windowStart, 0);
+    expect(wave().windowStart, previousStart);
     expect(wave().handles.map((h) => h.t).toList(), handles);
     n.setPlaying(false);
     await t.pumpAndSettle();
@@ -104,7 +104,7 @@ void main() {
     expect(t.takeException(), isNull);
   });
   testWidgets(
-    'transfer dialogs share accent and support Escape including text focus',
+    'transfer dialogs share accent and support Escape after interacting',
     (t) async {
       final f = await fixture.fixture();
       await t.pumpWidget(
@@ -128,10 +128,7 @@ void main() {
       final box = find.byType(Checkbox).first;
       final ctx = t.element(box);
       expect(Theme.of(ctx).colorScheme.primary, ctx.rm.accent.base);
-      await t.enterText(
-        find.byKey(const ValueKey('timing-import-text')),
-        'test',
-      );
+      await t.tap(find.byType(Checkbox).last);
       await t.sendKeyEvent(LogicalKeyboardKey.escape);
       await t.pumpAndSettle();
       expect(find.byType(TimingImportDialog), findsNothing);
@@ -156,6 +153,9 @@ void main() {
         container: f.container,
         child: ProviderScope(
           overrides: [
+            timingImportFilePickerProvider.overrideWithValue(
+              () async => "C:/fixtures/points.csv",
+            ),
             timingImportRunnerProvider.overrideWithValue(
               (_, args, input) => pending.future,
             ),
@@ -167,10 +167,8 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.text('导入时间点'));
     await t.pumpAndSettle();
-    await t.enterText(
-      find.byKey(const ValueKey('timing-import-text')),
-      'Filename,TD\nsong,1',
-    );
+    await t.tap(find.byKey(const ValueKey('timing-import-file')));
+    await t.pumpAndSettle();
     await t.tap(find.text('预览匹配'));
     await t.pump();
     await t.sendKeyEvent(LogicalKeyboardKey.escape);

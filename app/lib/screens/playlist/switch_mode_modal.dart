@@ -15,12 +15,14 @@ class SwitchModeModal extends StatelessWidget {
     super.key,
     required this.radio,
     required this.track,
+    this.trackCount = 1,
     this.originalTracks,
     required this.onConfirm,
   });
 
   final RadioStation radio;
   final PoolTrack track;
+  final int trackCount;
   final List<TrackRef>? originalTracks;
   final VoidCallback onConfirm;
 
@@ -28,6 +30,7 @@ class SwitchModeModal extends StatelessWidget {
     BuildContext context, {
     required RadioStation radio,
     required PoolTrack track,
+    int trackCount = 1,
     List<TrackRef>? originalTracks,
     required VoidCallback onConfirm,
   }) {
@@ -37,6 +40,7 @@ class SwitchModeModal extends StatelessWidget {
       builder: (_) => SwitchModeModal(
         radio: radio,
         track: track,
+        trackCount: trackCount,
         originalTracks: originalTracks,
         onConfirm: onConfirm,
       ),
@@ -128,7 +132,10 @@ class SwitchModeModal extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 14),
-                    _h4(context, '将分配的曲目'),
+                    _h4(
+                      context,
+                      trackCount == 1 ? '将分配的曲目' : '将分配 $trackCount 首曲目（预览第一首）',
+                    ),
                     const SizedBox(height: 8),
                     _trackChip(context),
                     const SizedBox(height: 14),

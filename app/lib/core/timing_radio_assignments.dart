@@ -49,3 +49,41 @@ PlaylistPlan previewTimingRadioAssignments({
   }
   return splitTypes ? next : next.syncPlaylistTypesFrom(playlistType);
 }
+
+/// Replace only the CLI-validated Event layouts; never guess original tracks here.
+PlaylistPlan previewXmlRadioLayouts({
+  required PlaylistPlan plan,
+  required List<Map> layouts,
+  required Map<String, int> capacities,
+  required bool splitTypes,
+  String? projectDir,
+}) {
+  var next = plan;
+  for (final layout in layouts) {
+    final mode = layout['mode'];
+    if (mode != 'builtin' && mode != 'custom') continue;
+    final radio = layout['radio_code'] as String;
+    if (!capacities.containsKey(radio)) throw FormatException('$radio 电台不可用。');
+    next = next.restoreBuiltin(radioCode: radio, playlistType: 'Event');
+    if (!splitTypes) {
+      next = next.restoreBuiltin(radioCode: radio, playlistType: 'FreeRoam');
+    }
+    if (mode == 'builtin') continue;
+    final sources = (layout['sources'] as List).cast<String>();
+    final capacity = capacities[radio]!;
+    if (sources.length > capacity ||
+        !next.canFitRadioSources(radio, sources, capacity)) {
+      throw FormatException('$radio 容量不足，请先开启电台扩容。');
+    }
+    for (var i = 0; i < sources.length; i++) {
+      next = next.assign(
+        source: sources[i],
+        radioCode: radio,
+        playlistType: 'Event',
+        slot: i + 1,
+        projectDir: projectDir,
+      );
+    }
+  }
+  return splitTypes ? next : next.syncPlaylistTypesFrom('Event');
+}

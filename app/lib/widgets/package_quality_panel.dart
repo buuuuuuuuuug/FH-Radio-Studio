@@ -1,3 +1,5 @@
+import 'rm_slider.dart';
+import 'rm_button.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
@@ -10,8 +12,10 @@ class PackageBuildDialogFrame extends StatefulWidget {
     required this.child,
     this.estimate,
     this.onQualityChanged,
+    this.footer,
   });
   final Widget child;
+  final Widget? footer;
   final Future<Map<String, dynamic>>? estimate;
   final ValueChanged<int>? onQualityChanged;
   @override
@@ -33,7 +37,24 @@ class _PackageBuildDialogFrameState extends State<PackageBuildDialogFrame> {
         child: SingleChildScrollView(
           child: LayoutBuilder(
             builder: (context, c) {
-              if (!expanded) return widget.child;
+              if (!expanded) {
+                return Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: rm.panel,
+                    borderRadius: BorderRadius.circular(RmTokens.rXl),
+                    border: Border.all(color: rm.borderStrong),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      widget.child,
+                      if (widget.footer != null) widget.footer!,
+                    ],
+                  ),
+                );
+              }
               final panel = Container(
                 decoration: BoxDecoration(
                   border: c.maxWidth >= 900
@@ -51,19 +72,26 @@ class _PackageBuildDialogFrameState extends State<PackageBuildDialogFrame> {
                   borderRadius: BorderRadius.circular(RmTokens.rXl),
                   boxShadow: RmTokens.modal,
                 ),
-                child: c.maxWidth >= 900
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: widget.child),
-                          SizedBox(width: 340, child: panel),
-                        ],
-                      )
-                    : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [widget.child, panel],
-                      ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    c.maxWidth >= 900
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: widget.child),
+                              SizedBox(width: 340, child: panel),
+                            ],
+                          )
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [widget.child, panel],
+                          ),
+                    if (widget.footer != null) widget.footer!,
+                  ],
+                ),
               );
             },
           ),
@@ -78,9 +106,24 @@ class _PackageBuildDialogFrameState extends State<PackageBuildDialogFrame> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          '构建质量',
-          style: RmText.sans(15, weight: FontWeight.w600, color: rm.fg),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '构建质量',
+                style: RmText.sans(15, weight: FontWeight.w600, color: rm.fg),
+              ),
+            ),
+            RmButton(
+              key: const ValueKey('package-quality-default'),
+              label: '默认 50',
+              size: RmButtonSize.sm,
+              onPressed: () {
+                setState(() => quality = 50);
+                widget.onQualityChanged?.call(50);
+              },
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Row(
@@ -88,83 +131,68 @@ class _PackageBuildDialogFrameState extends State<PackageBuildDialogFrame> {
             Expanded(
               child: Text(
                 'Vorbis · 1–100',
-                style: RmText.sans(11.5, color: rm.fg3),
+                style: RmText.mono(12, color: rm.fg3),
               ),
             ),
             Text(
               '$quality',
               key: const ValueKey('package-quality-value'),
               style: RmText.mono(
-                18,
+                20,
+                height: 1,
                 weight: FontWeight.w600,
                 color: rm.accent.base,
               ),
             ),
           ],
         ),
-        LayoutBuilder(
-          builder: (context, c) => Stack(
-            children: [
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  trackHeight: 3,
-                  thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 6,
+        SizedBox(
+          height: 32,
+          child: LayoutBuilder(
+            builder: (context, c) => Stack(
+              children: [
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
+                  ),
+                  child: RmSlider(
+                    key: const ValueKey('package-quality-slider'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    value: quality.toDouble(),
+                    min: 1,
+                    max: 100,
+                    divisions: 99,
+                    activeColor: rm.accent.base,
+                    label: '$quality',
+                    onChanged: (v) {
+                      setState(() => quality = v.round());
+                      widget.onQualityChanged?.call(quality);
+                    },
                   ),
                 ),
-                child: Slider(
-                  key: const ValueKey('package-quality-slider'),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  value: quality.toDouble(),
-                  min: 1,
-                  max: 100,
-                  divisions: 99,
-                  activeColor: rm.accent.base,
-                  label: '$quality',
-                  onChanged: (v) {
-                    setState(() => quality = v.round());
-                    widget.onQualityChanged?.call(quality);
-                  },
-                ),
-              ),
-              Positioned(
-                left: 12 + (c.maxWidth - 24) * 49 / 99 - 2,
-                top: 19,
-                child: IgnorePointer(
-                  child: Container(
-                    key: const ValueKey('package-default-marker'),
-                    width: 4,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: rm.accent.base,
-                      borderRadius: BorderRadius.circular(2),
+                Positioned(
+                  left: 12 + (c.maxWidth - 24) * 49 / 99 - 2,
+                  top: 11,
+                  child: IgnorePointer(
+                    child: Container(
+                      key: const ValueKey('package-default-marker'),
+                      width: 4,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: rm.accent.base,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            key: const ValueKey('package-quality-default'),
-            onPressed: () {
-              setState(() => quality = 50);
-              widget.onQualityChanged?.call(50);
-            },
-            child: Text(
-              '默认 50',
-              style: RmText.sans(
-                11,
-                color: rm.accent.base,
-                weight: FontWeight.w600,
-              ),
+              ],
             ),
           ),
         ),
-        Text('默认 50；数值越高，体积通常越大。', style: RmText.sans(11, color: rm.fg3)),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         FutureBuilder<Map<String, dynamic>>(
           future: widget.estimate,
           builder: (context, snapshot) {
@@ -255,16 +283,17 @@ class _PackageBuildDialogFrameState extends State<PackageBuildDialogFrame> {
                     ),
                   ),
                 Container(
-                  height: 260,
+                  constraints: const BoxConstraints(maxHeight: 260),
                   decoration: BoxDecoration(
                     border: Border.all(color: rm.border),
                     borderRadius: BorderRadius.circular(RmTokens.rSm),
                   ),
                   child: ListView.separated(
                     key: const ValueKey('package-file-estimates'),
-                    padding: const EdgeInsets.all(10),
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.all(8),
                     itemCount: rows.length,
-                    separatorBuilder: (_, i) => const SizedBox(height: 9),
+                    separatorBuilder: (_, i) => const SizedBox(height: 7),
                     itemBuilder: (context, i) {
                       final row = rows[i];
                       final name = '${row['name']}';

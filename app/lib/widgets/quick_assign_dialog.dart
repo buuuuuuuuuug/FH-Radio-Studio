@@ -1,3 +1,4 @@
+import 'assignment_radio_choice.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +12,7 @@ import '../state/studio_state.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import 'rm_button.dart';
+import '../theme/tokens.dart';
 
 PlaylistPlan editableAssignmentPlan(WidgetRef ref) {
   final plan = ref.read(effectivePlaylistPlanProvider);
@@ -42,6 +44,7 @@ int assignmentLimit(WidgetRef ref, RadioStation radio, String type) {
 Future<bool> showQuickAssign(BuildContext context, PoolTrack track) async =>
     await showDialog<bool>(
       context: context,
+      barrierColor: RmTokens.modalBackdrop,
       builder: (_) => QuickAssignDialog(track: track),
     ) ??
     false;
@@ -146,64 +149,176 @@ class _QuickAssignDialogState extends ConsumerState<QuickAssignDialog> {
         }
         return KeyEventResult.ignored;
       },
-      child: AlertDialog(
+      child: Dialog(
         backgroundColor: rm.panel,
-        title: Text('分配至电台', style: RmText.modalH2(color: rm.fg)),
-        content: SizedBox(
-          width: 520,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  widget.track.title,
-                  style: RmText.sans(13, weight: FontWeight.w600, color: rm.fg),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(RmTokens.rLg),
+          side: BorderSide(color: rm.border),
+        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 560,
+            maxHeight: MediaQuery.sizeOf(context).height - 48,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: rm.accent.bg,
+                        borderRadius: BorderRadius.circular(RmTokens.rSm),
+                      ),
+                      child: Icon(
+                        Icons.radio_outlined,
+                        color: rm.accent.base,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('分配至电台', style: RmText.modalH2(color: rm.fg)),
+                          const SizedBox(height: 3),
+                          Text(
+                            '按 1–9 选择 · 支持小键盘 · Esc 取消',
+                            style: RmText.sans(11, color: rm.fg3),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '按 1–9 立即选择电台，支持数字小键盘；Esc 取消。分配到播放列表草稿，重复歌曲不再追加。首次分配将电台切换为自建。',
-                  style: RmText.sans(11.5, color: rm.fg3),
-                ),
-                if (!(state.pool
-                            .where((t) => t.id == widget.track.id)
-                            .firstOrNull ??
-                        widget.track)
-                    .configured)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      '此曲节点未完成，可以先分配；完成并保存后才能构建。',
-                      style: RmText.sans(11.5, color: rm.warn),
+              ),
+              Container(height: 1, color: rm.border),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          widget.track.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: RmText.sans(
+                            14,
+                            weight: FontWeight.w600,
+                            color: rm.fg,
+                          ),
+                        ),
+                        if (widget.track.artist.isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            widget.track.artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: RmText.sans(11.5, color: rm.fg3),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        for (final radio in radios) ...[
+                          _radioChoice(context, radio, type, plan),
+                          const SizedBox(height: 6),
+                        ],
+                        if (catalog.failed)
+                          Text(
+                            '电台信息不可用，请先在概览刷新项目。',
+                            style: RmText.sans(12, color: rm.warn),
+                          ),
+                        if (!(state.pool
+                                    .where((t) => t.id == widget.track.id)
+                                    .firstOrNull ??
+                                widget.track)
+                            .configured)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              '可先分配；完成时间点并保存后才能构建。',
+                              style: RmText.sans(11, color: rm.warn),
+                            ),
+                          ),
+                        if (error != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              error!,
+                              style: RmText.sans(12, color: rm.danger),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                const SizedBox(height: 12),
-                if (catalog.failed)
-                  Text(
-                    '电台信息不可用，请先在概览刷新项目。',
-                    style: RmText.sans(12, color: rm.warn),
-                  ),
-                for (final radio in radios)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: RmButton(
-                      key: ValueKey('quick-assign-${radio.code}'),
-                      onPressed: () => assign(radio, type),
-                      label:
-                          '${radio.code.substring(1)} · ${radio.name}  ${plan.assignmentsForRadio(radio.code, type).length} / ${assignmentLimit(ref, radio, type) == 4096 ? '扩容' : assignmentLimit(ref, radio, type)}',
-                      tooltip: '选择 ${radio.code}',
+                ),
+              ),
+              Container(height: 1, color: rm.border),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '分配到草稿，重复曲目不追加。\n首次分配会将电台切换为自建。',
+                        style: RmText.sans(10.5, color: rm.fg3),
+                      ),
                     ),
-                  ),
-                if (error != null)
-                  Text(error!, style: RmText.sans(12, color: rm.danger)),
-              ],
-            ),
+                    const SizedBox(width: 12),
+                    RmButton(
+                      label: '取消',
+                      onPressed: () => Navigator.pop(context, false),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        actions: [
-          RmButton(label: '取消', onPressed: () => Navigator.pop(context, false)),
-        ],
       ),
+    );
+  }
+
+  Widget _radioChoice(
+    BuildContext context,
+    RadioStation radio,
+    String type,
+    PlaylistPlan plan,
+  ) {
+    final rm = context.rm;
+    final count = plan.assignmentsForRadio(radio.code, type).length;
+    final limit = assignmentLimit(ref, radio, type);
+    final assigned =
+        plan.assignmentFor(
+          source: widget.track.source,
+          radioCode: radio.code,
+          playlistType: type,
+        ) !=
+        null;
+    final full = count >= limit && !assigned;
+    final color = assigned
+        ? rm.accent.base
+        : full
+        ? rm.warn
+        : rm.fg2;
+    return AssignmentRadioChoice(
+      choiceKey: ValueKey('quick-assign-${radio.code}'),
+      radio: radio,
+      selected: assigned,
+      summary: assigned
+          ? '已分配 · $count 首'
+          : limit == 4096
+          ? '$count 首 · 扩容'
+          : '$count / $limit${full ? ' · 已满' : ''}',
+      summaryColor: color,
+      onTap: () => assign(radio, type),
     );
   }
 }

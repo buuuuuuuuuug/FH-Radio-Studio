@@ -16,8 +16,8 @@ import 'group_colors.dart';
 /// 6. markers（6 个时间点：TD/PD/TL-A/TL-B/PL-A/PL-B），含顶部 flag
 /// 7. playhead（白线 + 轻微 glow）
 ///
-/// 布局：top padding 18px 给 flag 留位 → bars 区 180px → 6 gap → segments 24px。
-/// 有可见段落时总高 = 228；无段落时 = 198，time axis 由父 widget 单独渲染。
+/// 布局：top padding 18px 给 flag 留位 → bars 区 130px → 6 gap → segments 24px。
+/// 有可见段落时总高 = 178；无段落时 = 148，time axis 由父 widget 单独渲染。
 class WaveformPainter extends CustomPainter {
   WaveformPainter({
     required this.rm,
@@ -48,11 +48,11 @@ class WaveformPainter extends CustomPainter {
   final double? windowEnd;
 
   static const double flagPad = 18;
-  static const double barsHeight = 180;
+  static const double barsHeight = 130;
   static const double gap = 6;
   static const double segHeight = 24;
   static const double totalHeight =
-      flagPad + barsHeight + gap + segHeight; // 228
+      flagPad + barsHeight + gap + segHeight; // 178
 
   static double heightForWindow(
     List<Segment> segments,

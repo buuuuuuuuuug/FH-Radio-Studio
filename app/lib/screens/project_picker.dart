@@ -28,11 +28,26 @@ class ProjectPickerScreen extends ConsumerStatefulWidget {
 
 class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   bool _redirected = false;
+  bool _choosingDirectory = false;
+
+  bool _projectOperationActive(StudioState state) =>
+      state.busy ||
+      state.fileIntegrityRefreshing ||
+      state.projectPathMigrationRunning;
+
+  bool _canChangeProject() {
+    if (!_projectOperationActive(ref.read(studioProvider))) return true;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('请等待当前项目操作完成后再切换或编辑项目入口。')));
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
     final rm = context.rm;
     final cli = ref.watch(studioProvider);
+    final projectActionsEnabled = !_projectOperationActive(cli);
     final appInfo = ref.watch(appInfoProvider).valueOrNull ?? AppInfo.fallback;
     if (widget.autoOpen && cli.hasProject && !_redirected) {
       _redirected = true;
@@ -68,12 +83,12 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                         icon: 'plus',
                         title: '新建工程',
                         body: '选择一个文件夹作为自包含项目目录，素材、包和原始备份都会放在里面。',
-                        onTap: () => _pickProject(
-                          context,
-                          ref,
-                          cli.projectDir,
-                          title: '新建 FH Radio Studio 项目目录',
-                        ),
+                        onTap: projectActionsEnabled
+                            ? () => _pickProject(
+                                cli.projectDir,
+                                title: '新建 FH Radio Studio 项目目录',
+                              )
+                            : null,
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -82,12 +97,12 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                         icon: 'import',
                         title: '打开项目目录',
                         body: '打开已有 FH Radio Studio 项目目录，或把普通文件夹初始化成项目。',
-                        onTap: () => _pickProject(
-                          context,
-                          ref,
-                          cli.projectDir,
-                          title: '打开 FH Radio Studio 项目目录',
-                        ),
+                        onTap: projectActionsEnabled
+                            ? () => _pickProject(
+                                cli.projectDir,
+                                title: '打开 FH Radio Studio 项目目录',
+                              )
+                            : null,
                       ),
                     ),
                   ],
@@ -103,9 +118,15 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                       path: path,
                       active: cli.hasProject && _samePath(path, cli.projectDir),
                       exists: Directory(path).existsSync(),
-                      onOpen: () => _openRecentProject(path),
-                      onEdit: () => _relocateRecentProject(path),
-                      onRemove: () => _confirmRemoveRecentProject(path),
+                      onOpen: projectActionsEnabled
+                          ? () => _openRecentProject(path)
+                          : null,
+                      onEdit: projectActionsEnabled
+                          ? () => _relocateRecentProject(path)
+                          : null,
+                      onRemove: projectActionsEnabled
+                          ? () => _confirmRemoveRecentProject(path)
+                          : null,
                     ),
                     const SizedBox(height: 6),
                   ],
@@ -119,22 +140,44 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
     );
   }
 
+  Future<String?> _chooseDirectory({
+    required String title,
+    String? initialDirectory,
+  }) async {
+    if (_choosingDirectory || !_canChangeProject()) return null;
+    _choosingDirectory = true;
+    try {
+      return await FilePicker.getDirectoryPath(
+        dialogTitle: title,
+        initialDirectory: initialDirectory,
+      );
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('无法选择项目目录：$error')));
+      }
+      return null;
+    } finally {
+      _choosingDirectory = false;
+    }
+  }
+
   Future<void> _pickProject(
-    BuildContext context,
-    WidgetRef ref,
     String currentProjectDir, {
     required String title,
   }) async {
-    final selected = await FilePicker.getDirectoryPath(
-      dialogTitle: title,
+    final selected = await _chooseDirectory(
+      title: title,
       initialDirectory: p.dirname(currentProjectDir),
     );
-    if (selected == null) return;
+    if (!mounted || selected == null || !_canChangeProject()) return;
     ref.read(studioProvider.notifier).setProjectDirAndStartFullScan(selected);
-    if (context.mounted) context.go(RmRoutes.dashboard);
+    context.go(RmRoutes.dashboard);
   }
 
   Future<void> _openRecentProject(String path) async {
+    if (!_canChangeProject()) return;
     if (!Directory(path).existsSync()) {
       await _showMissingProjectDialog(path);
       return;
@@ -144,15 +187,14 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   }
 
   Future<void> _relocateRecentProject(String oldPath) async {
-    final selected = await FilePicker.getDirectoryPath(
-      dialogTitle: '重新定位 FH Radio Studio 项目目录',
+    final selected = await _chooseDirectory(
+      title: '重新定位 FH Radio Studio 项目目录',
       initialDirectory: _existingDirectoryForPicker(oldPath),
     );
-    if (selected == null) return;
+    if (!mounted || selected == null || !_canChangeProject()) return;
     ref
         .read(studioProvider.notifier)
         .updateRecentProjectPath(oldPath, selected);
-    if (!mounted) return;
     final cli = ref.read(studioProvider);
     if (cli.hasProject && _samePath(cli.projectDir, selected)) {
       context.go(RmRoutes.dashboard);
@@ -160,12 +202,13 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   }
 
   Future<void> _confirmRemoveRecentProject(String path) async {
+    if (!_canChangeProject()) return;
     final shouldRemove = await _showRemoveProjectDialog(
       title: '移除最近项目？',
       body: '这只会从最近项目列表移除入口，不会删除磁盘上的项目文件。',
       path: path,
     );
-    if (shouldRemove != true || !mounted) return;
+    if (shouldRemove != true || !mounted || !_canChangeProject()) return;
     ref.read(studioProvider.notifier).removeRecentProject(path);
   }
 
@@ -503,7 +546,7 @@ class _BootCard extends StatefulWidget {
   final String icon;
   final String title;
   final String body;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   State<_BootCard> createState() => _BootCardState();
@@ -516,7 +559,9 @@ class _BootCardState extends State<_BootCard> {
   Widget build(BuildContext context) {
     final rm = context.rm;
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: widget.onTap == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
@@ -568,9 +613,9 @@ class _RecentRow extends StatefulWidget {
   final String path;
   final bool active;
   final bool exists;
-  final VoidCallback onOpen;
-  final VoidCallback onEdit;
-  final VoidCallback onRemove;
+  final VoidCallback? onOpen;
+  final VoidCallback? onEdit;
+  final VoidCallback? onRemove;
 
   @override
   State<_RecentRow> createState() => _RecentRowState();
@@ -588,12 +633,14 @@ class _RecentRowState extends State<_RecentRow> {
         ? rm.borderStrong
         : rm.border;
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
+      cursor: widget.onOpen == null
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onOpen,
-        onSecondaryTapDown: _showMenu,
+        onSecondaryTapDown: widget.onOpen == null ? null : _showMenu,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
@@ -691,11 +738,11 @@ class _RecentRowState extends State<_RecentRow> {
     if (!mounted || action == null) return;
     switch (action) {
       case _RecentProjectAction.open:
-        widget.onOpen();
+        widget.onOpen?.call();
       case _RecentProjectAction.relocate:
-        widget.onEdit();
+        widget.onEdit?.call();
       case _RecentProjectAction.remove:
-        widget.onRemove();
+        widget.onRemove?.call();
     }
   }
 }

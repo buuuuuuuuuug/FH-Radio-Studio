@@ -40,6 +40,7 @@ class TimingExportDialog extends ConsumerStatefulWidget {
 
 class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
   String identity = 'filename';
+  String timeUnit = 'time';
   bool busy = false;
   bool includeRadio = false;
   String? message;
@@ -57,6 +58,8 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
             studio.projectDir,
             '--identity',
             identity,
+            '--time-unit',
+            timeUnit,
             if (includeRadio) '--include-radio',
           ], null);
       if (!result.ok) {
@@ -71,7 +74,9 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
       }
       final path = await FilePicker.saveFile(
         dialogTitle: '导出时间点 CSV',
-        fileName: 'track_timing.csv',
+        fileName: timeUnit == 'samples'
+            ? 'track_timing_samples_48000.csv'
+            : 'track_timing.csv',
         type: FileType.custom,
         allowedExtensions: ['csv'],
       );
@@ -116,6 +121,22 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
             style: RmText.sans(12, color: rm.fg2),
           ),
           const SizedBox(height: 12),
+          Text('时间点的数据形式', style: RmText.sans(11.5, color: rm.fg2)),
+          const SizedBox(height: 5),
+          RmSelect<String>(
+            key: const ValueKey('timing-export-time-unit'),
+            value: timeUnit,
+            items: timingTimeUnits,
+            onChanged: busy ? null : (v) => setState(() => timeUnit = v),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            timeUnit == 'samples'
+                ? '固定 48000 Hz，导出为整数采样点；再次导入时请选择“采样点”形式。'
+                : '按分:秒.毫秒导出；若要保留采样点精度，请选择采样点形式。',
+            style: RmText.sans(11, color: rm.fg3),
+          ),
+          const SizedBox(height: 12),
           Text('Filename 列使用的歌曲标识', style: RmText.sans(11.5, color: rm.fg2)),
           const SizedBox(height: 5),
           RmSelect<String>(
@@ -145,7 +166,7 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
             ),
           const SizedBox(height: 12),
           Text(
-            '${includeRadio ? 'Filename,Radio_station,TD,PD,TL-A,TL-B,PL-A,PL-B' : 'Filename,TD,PD,TL-A,TL-B,PL-A,PL-B'}\nTL-A / PL-A 为起点，TL-B / PL-B 为终点；空白表示该时间点未配置。',
+            '${timingCsvTemplateFor(includeRadio: includeRadio, timeUnit: timeUnit).split('\n').first}\nTL-A / PL-A 为起点，TL-B / PL-B 为终点；空白表示该时间点未配置。',
             style: RmText.sans(11.5, color: rm.fg3),
           ),
           if (message != null)

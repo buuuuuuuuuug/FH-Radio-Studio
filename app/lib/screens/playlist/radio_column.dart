@@ -46,6 +46,7 @@ class PlaylistColumn extends StatefulWidget {
     required int count,
     int? capacity,
     int pendingCount = 0,
+    bool expanded = false,
     int? originalCount,
     required List<Widget> children,
     VoidCallback? onRestoreBuiltin,
@@ -57,6 +58,7 @@ class PlaylistColumn extends StatefulWidget {
         isCustom: isCustom,
         count: count,
         pendingCount: pendingCount,
+        expanded: expanded,
         capacity: capacity ?? radio.slot,
         originalCount: originalCount ?? radio.slot,
         onRestoreBuiltin: onRestoreBuiltin,
@@ -72,10 +74,12 @@ class PlaylistColumn extends StatefulWidget {
     required int count,
     int? capacity,
     int pendingCount = 0,
+    bool expanded = false,
     int? originalCount,
     required int itemCount,
     required IndexedWidgetBuilder itemBuilder,
     VoidCallback? onRestoreBuiltin,
+    Widget? filterControls,
   }) => PlaylistColumn.builder(
     kind: isCustom ? ColumnKind.customRadio : ColumnKind.builtinRadio,
     header: _RadioHeader(
@@ -83,10 +87,12 @@ class PlaylistColumn extends StatefulWidget {
       isCustom: isCustom,
       count: count,
       pendingCount: pendingCount,
+      expanded: expanded,
       capacity: capacity ?? radio.slot,
       originalCount: originalCount ?? radio.slot,
       onRestoreBuiltin: onRestoreBuiltin,
     ),
+    filterControls: filterControls,
     itemCount: itemCount,
     itemBuilder: itemBuilder,
     emptyText: isCustom ? '空 · 拖入池中曲目' : '无原版数据',
@@ -234,7 +240,7 @@ class _PlaylistColumnState extends State<PlaylistColumn> {
     final rm = context.rm;
     if (widget.header is _RadioHeader) {
       final header = widget.header as _RadioHeader;
-      final count = header.capacity == 4096
+      final count = header.expanded || header.capacity == 4096
           ? '${header.count} 首 · 原有 ${header.originalCount} 首 · 扩容'
           : '${header.count} / ${header.capacity}';
       return Wrap(
@@ -285,6 +291,7 @@ class _RadioHeader extends StatelessWidget {
     required this.count,
     required this.capacity,
     this.pendingCount = 0,
+    this.expanded = false,
     required this.originalCount,
     this.onRestoreBuiltin,
   });
@@ -294,6 +301,7 @@ class _RadioHeader extends StatelessWidget {
   final int count;
   final int capacity;
   final int pendingCount;
+  final bool expanded;
   final int originalCount;
   final VoidCallback? onRestoreBuiltin;
 

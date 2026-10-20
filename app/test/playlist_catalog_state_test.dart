@@ -22,14 +22,7 @@ void main() {
   test('loads playlist catalog from latest package before game files', () {
     final repoRoot = p.dirname(p.current);
     final catalog = loadPlaylistCatalog(
-      packageDir: p.join(
-        repoRoot,
-        'test',
-        'project',
-        'cli-full-flow',
-        'packages',
-        'r4-full-flow',
-      ),
+      packageDir: _packageFixture(),
       gameDir: p.join(
         repoRoot,
         'test',
@@ -55,14 +48,7 @@ void main() {
 
   test('game view reads installed game files even when a package exists', () {
     final repoRoot = p.dirname(p.current);
-    final packageDir = p.join(
-      repoRoot,
-      'test',
-      'project',
-      'cli-full-flow',
-      'packages',
-      'r4-full-flow',
-    );
+    final packageDir = _packageFixture();
     final catalog = loadPlaylistCatalog(
       view: PlaylistCatalogView.game,
       packageDir: packageDir,
@@ -318,16 +304,7 @@ void main() {
   );
 
   test('game view marks deployed custom lists and seeds a draft plan', () {
-    final repoRoot = p.dirname(p.current);
-    final packageDir = p.join(
-      repoRoot,
-      'test',
-      'project',
-      'cli-full-flow',
-      'packages',
-      'r4-full-flow',
-    );
-    _ensureCliFullFlowMetadata(repoRoot);
+    final packageDir = _packageFixture();
     final temp = Directory.systemTemp.createTempSync(
       'fh-radio-studio-game-playlist-',
     );
@@ -363,16 +340,7 @@ void main() {
   });
 
   test('prefers package manifest source over a pool title/artist match', () {
-    final repoRoot = p.dirname(p.current);
-    final packageDir = p.join(
-      repoRoot,
-      'test',
-      'project',
-      'cli-full-flow',
-      'packages',
-      'r4-full-flow',
-    );
-    _ensureCliFullFlowMetadata(repoRoot);
+    final packageDir = _packageFixture();
 
     final catalog = loadPlaylistCatalog(
       view: PlaylistCatalogView.package,
@@ -1009,12 +977,52 @@ String _tempProjectDir() {
   return project.path;
 }
 
-void _ensureCliFullFlowMetadata(String repoRoot) {
-  final projectDir = p.join(repoRoot, 'test', 'project', 'cli-full-flow');
-  _upsertTrackMetadata(
-    projectDir,
-    p.join(projectDir, 'sources', 'FH Radio Studio Dev - Full Flow Test.wav'),
+String _packageFixture() {
+  final projectDir = _tempProjectDir();
+  final source = File(p.join(projectDir, 'sources', 'Full Flow Test.wav'))
+    ..writeAsBytesSync(const [0]);
+  final trackKey = _upsertTrackMetadata(projectDir, source.path);
+  final packageDir = p.join(projectDir, 'packages', 'fixture');
+  final package = Directory(p.join(packageDir, 'package'))
+    ..createSync(recursive: true);
+  final audio = Directory(p.join(package.path, 'media', 'audio'))
+    ..createSync(recursive: true);
+  File(p.join(audio.path, 'RadioInfo_CN.xml')).writeAsStringSync('''
+<RadioInfo Language="CN"><RadioStations>
+  <RadioStation Number="1" Name="Horizon Pulse">
+    <SampleList Type="Track"><Sample SoundName="R1_original" SampleLength="48000" SampleRate="48000" DisplayName="Original" Artist="Forza" /></SampleList>
+    <PlayList Type="FreeRoam"><Entry Name="R1_original" /></PlayList>
+    <PlayList Type="Event"><Entry Name="R1_original" /></PlayList>
+  </RadioStation>
+  <RadioStation Number="4" Name="Horizon XS">
+    <SampleList Type="Track"><Sample SoundName="R4_custom" SampleLength="48000" SampleRate="48000" DisplayName="Full Flow Test" Artist="Test artist" /></SampleList>
+    <PlayList Type="FreeRoam"><Entry Name="R4_custom" /></PlayList>
+    <PlayList Type="Event"><Entry Name="R4_custom" /></PlayList>
+  </RadioStation>
+</RadioStations></RadioInfo>
+''', encoding: utf8);
+  File(
+    p.join(package.path, 'fh_radio_studio_package_manifest.json'),
+  ).writeAsStringSync(
+    jsonEncode({
+      'schema_version': 2,
+      'radios': [
+        {
+          'radio': 4,
+          'assignments': [
+            {
+              'track_key': trackKey,
+              'target_sound_name': 'R4_custom',
+              'playlist_entry': true,
+              'playlist_types': ['FreeRoam', 'Event'],
+            },
+          ],
+        },
+      ],
+    }),
+    encoding: utf8,
   );
+  return packageDir;
 }
 
 void _writeLegacyPlaylistPlan(String projectDir, PlaylistPlan plan) {
