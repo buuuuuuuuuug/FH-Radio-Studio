@@ -219,9 +219,29 @@ def main() -> int:
     if not args.skip_uv_copy:
         copy_uv(args.uv_exe, repo_root)
 
+    remove_managed_python_aliases(python_dir)
+
     print(f"Prepared release runtime: {runtime_dir}")
     print(f"Prepared release toolchain: {toolchain_dir}")
     return 0
+
+
+def remove_managed_python_aliases(python_dir: Path) -> None:
+    """Keep versioned interpreters, without uv's optional nonportable aliases."""
+    root = python_dir.resolve()
+    for alias in python_dir.iterdir():
+        junction = getattr(alias, "is_junction", lambda: False)()
+        if not alias.is_symlink() and not junction:
+            continue
+        target = alias.resolve(strict=True)
+        if not alias.name.startswith("cpython-") or target.parent != root or not target.is_dir():
+            raise ValueError(f"Unexpected Python runtime link: {alias}")
+        # uv can rediscover the complete versioned directory without this alias.
+        # Removing only the link also avoids duplicating an entire interpreter.
+        if junction:
+            alias.rmdir()
+        else:
+            alias.unlink()
 
 
 def resolve_output_path(repo_root: Path, path: Path) -> Path:
