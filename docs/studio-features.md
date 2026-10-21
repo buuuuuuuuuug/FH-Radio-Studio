@@ -79,5 +79,5 @@ RadioInfo XML imports read only R1–R9 Event playlists and uniquely match title
 Optional XML station assignment updates only the Event draft and preserves FreeRoam.
 Other sample rates and conflicting marker definitions are reported rather than converted.
 
-See [the illustrated overview](改动说明-精简版.md) and
+See [the illustrated overview](../README.md) and
 [complete changes and interchange rules](改动说明-详细版.md).
