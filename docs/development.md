@@ -132,9 +132,16 @@ Install local commit hooks:
 uv run --locked pre-commit install
 ```
 
-Run all pre-commit hooks manually:
+Resolve Flutter packages before running the hooks, including on a fresh checkout.
+`dart format` reads the package language version from `.dart_tool/package_config.json`;
+without it, the SDK default can produce different formatting.
+
+Run all pre-commit hooks manually from the repository root:
 
 ```powershell
+Push-Location app
+flutter pub get
+Pop-Location
 uv run --locked pre-commit run --all-files
 ```
 

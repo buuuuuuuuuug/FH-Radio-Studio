@@ -67,6 +67,11 @@ jobs:
           uv --version
           flutter --version
 
+      # dart format needs package_config.json to use the package language version.
+      - name: Get Flutter packages
+        working-directory: app
+        run: flutter pub get
+
       - name: Run pre-commit
         run: uv run --locked pre-commit run --all-files --show-diff-on-failure
 
@@ -80,10 +85,6 @@ jobs:
         run: |
           uv run --locked python tools/test/create_mock_game.py --reset
           uv run --locked pytest test/test_cli_mock_game.py::test_full_project_flow_builds_baseline_and_deploys_to_mock
-
-      - name: Get Flutter packages
-        working-directory: app
-        run: flutter pub get
 
       - name: Run Flutter tests
         working-directory: app
