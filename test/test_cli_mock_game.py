@@ -6,13 +6,13 @@ import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from conftest import assert_cli_ok, md5_file, run_cli, write_test_tone
-
 from backend.fh_radio_studio_cli.project_refs import (
     project_path_or_absolute,
     track_key_for_project_path,
 )
 from tools.test.create_mock_game import FH6_STEAM_APP_ID, MOCK_TRACKS, build_mock_fsb5
+
+from .conftest import assert_cli_ok, md5_file, run_cli, write_test_tone
 
 
 def _scan_project_sources(project_dir: Path, *sources: Path) -> None:

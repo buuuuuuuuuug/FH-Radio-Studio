@@ -7,7 +7,6 @@ import types
 from pathlib import Path
 
 import numpy as np
-from conftest import assert_cli_ok, run_cli, write_test_tone
 
 from backend.fh_radio_studio_cli.ai_timepoints.cli import (
     _apply_timing_constraints,
@@ -24,6 +23,8 @@ from backend.fh_radio_studio_cli.ai_timepoints.providers import (
     songformer,
 )
 from backend.fh_radio_studio_cli.ai_timepoints.schema import ProviderStatus
+
+from .conftest import assert_cli_ok, run_cli, write_test_tone
 
 
 def test_analyze_audio_emits_stable_contract(tmp_path) -> None:

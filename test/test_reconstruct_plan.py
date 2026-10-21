@@ -4,12 +4,12 @@ import json
 from pathlib import Path
 from typing import List, Tuple
 
-from conftest import assert_cli_ok, run_cli
-
 from backend.fh_radio_studio_cli.reconstruct_plan import (
     is_ui_supported_radio,
     reconstruct_playlist_plan,
 )
+
+from .conftest import assert_cli_ok, run_cli
 
 
 def _radio_info_xml(

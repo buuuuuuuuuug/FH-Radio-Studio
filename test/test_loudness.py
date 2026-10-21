@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from conftest import assert_cli_ok, run_cli, write_test_tone
 
 from backend.fh_radio_studio_cli.loudness import (
     DEFAULT_CUSTOM_LOUDNESS_OFFSET_LU,
@@ -21,6 +20,8 @@ from backend.fh_radio_studio_cli.loudness import (
     normalize_custom_loudness_offset_lu,
     prepare_loudness_matched_audio,
 )
+
+from .conftest import assert_cli_ok, run_cli, write_test_tone
 
 
 def test_loudness_matching_uses_baseline_reference_median_target(tmp_path: Path) -> None:

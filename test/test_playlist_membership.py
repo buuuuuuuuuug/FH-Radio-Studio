@@ -3,11 +3,12 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
-from conftest import assert_cli_ok, run_cli
 
 from backend.fh_radio_studio_cli.common import CliError
 from backend.fh_radio_studio_cli.playlist_membership import playlist_membership
 from backend.fh_radio_studio_cli.project_refs import project_ref_for_path, track_key_for_source_ref
+
+from .conftest import assert_cli_ok, run_cli
 
 
 def fixture(tmp_path, *, duplicate=False, count=1):
