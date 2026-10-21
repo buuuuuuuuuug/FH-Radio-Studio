@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "source_commit": "8dfc00c8e9a6781babd0ba3a06e68228db5a3267",
+  "unmodified_source_compilation": true,
+  "official_dll_sha256": "c32f872e30d9c4ff17a322a1a2a2dda35c3ea488cd0bcfa10a8ebeb8ca871585",
+  "rebuilt_dll_sha256": "bc78d03276f1318a4aca306c9886b058440abbd0aa3ef483860908309074585b",
+  "executable_text_section_equal": true,
+  "audio_cases": [
+    {
+      "rate": 48000,
+      "channels": 2,
+      "candidate_pairs_equal": true,
+      "candidates": 10
+    },
+    {
+      "rate": 44100,
+      "channels": 1,
+      "candidate_pairs_equal": true,
+      "candidates": 10
+    }
+  ],
+  "silence": {
+    "candidate_pairs_equal": true,
+    "candidates": 10,
+    "valid_ranges": true
+  }
+}

@@ -395,6 +395,14 @@ Invoke-Checked (Get-CMakeCommand) $cmakeConfigureArgs $AppRoot
 Write-Step "Building Windows release"
 Invoke-Checked "flutter" (@("build", "windows", "--release") + $FlutterBuildInfoArguments) $AppRoot
 
+if (Test-Path -LiteralPath (Join-Path $BundleDir "toolchain\tools\audio\seamless\loopfinder.dll")) {
+  Write-Step "Attaching native engine source and distribution notices"
+  Invoke-Checked "uv" @(
+    "run", "--locked", "python", "tools/prepare_seamless_distribution.py",
+    "--app-dir", $BundleDir
+  )
+}
+
 Assert-ReleaseBundle
 
 if (-not $SkipArchive) {

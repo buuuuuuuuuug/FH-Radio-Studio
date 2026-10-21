@@ -138,6 +138,7 @@ install(TARGETS ${BINARY_NAME} fh_radio_close_guard RUNTIME DESTINATION "${CMAKE
   COMPONENT Runtime)
 
 # Keep portable builds independent of a globally installed Visual C++ runtime.
+set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION "${INSTALL_BUNDLE_LIB_DIR}")
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT Runtime)
 include(InstallRequiredSystemLibraries)

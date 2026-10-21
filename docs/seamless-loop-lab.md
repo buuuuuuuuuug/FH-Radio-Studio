@@ -24,13 +24,20 @@ guarantee of a musically seamless transition. Bar counts are not invented.
 - ABI: `loopfinder/include/loopfinder/loopfinder_api.h`, `lf_analyze_file`
 - Reference engine: portable 1.11.0 `loopfinder.dll` (not committed here)
 - SHA256: `c32f872e30d9c4ff17a322a1a2a2dda35c3ea488cd0bcfa10a8ebeb8ca871585`
-- The SeamlessLoopMusic repository has an MIT license, but its native build
-  also links third-party components. In the inspected source, aubio is linked
-  statically and has a GPL-3.0 license file. The top-level MIT notice alone is
-  not a complete redistribution notice for the native binary.
-- See [source and distribution notes](third-party-notices.md). This repository
-  does not include the native DLL; verify component notices and corresponding
-  source requirements before preparing a public binary bundle.
+- Pinned corresponding source: upstream v1.11.0 commit
+  `8dfc00c8e9a6781babd0ba3a06e68228db5a3267`. The official DLL hash matches the
+  bundled reference. An unmodified source rebuild has the same executable
+  `.text` section and matching loop endpoints in the recorded audio checks.
+- Component notices, provenance and rebuild instructions are maintained in
+  [native distribution materials](licenses/seamless-loop-music/README.md).
+  They include aubio GPL-3.0-or-later, KissFFT BSD-3-Clause, and the applicable
+  MIT/MIT-0 notices, rather than describing the entire DLL as MIT.
+- `tools/build_release.ps1` attaches these notices and the complete pinned source
+  ZIP next to the DLL. The packaging helper verifies the source and binary hashes
+  and places the required app-local C++/OpenMP runtimes next to the native library.
+- See [source and distribution notes](third-party-notices.md) for the separate
+  FMOD SDK distribution question. Completing native-engine materials does not
+  provide an FMOD redistribution grant or relicense the whole application.
 
 The backend converts sources to a temporary float WAV at their original sample
 rate. Returned PCM frame positions map directly to seconds; channel count does

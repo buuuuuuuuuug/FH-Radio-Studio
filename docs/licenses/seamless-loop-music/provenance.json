@@ -1,0 +1,27 @@
+{
+  "upstream": "https://github.com/CPUrising/seamless-loop-music",
+  "release": "v1.11.0",
+  "source_commit": "8dfc00c8e9a6781babd0ba3a06e68228db5a3267",
+  "dll_sha256": "c32f872e30d9c4ff17a322a1a2a2dda35c3ea488cd0bcfa10a8ebeb8ca871585",
+  "source_sha256": "5b98a2eb1eeecf2e386116064005f4b6fb8657f74009eedd0101eb7607257cc7",
+  "official_portable_sha256": "f52b3800c1fdad3eb7afea534585c0b2964ff7c1eec9948d380d9d3f0076b723",
+  "source_url": "https://codeload.github.com/CPUrising/seamless-loop-music/zip/8dfc00c8e9a6781babd0ba3a06e68228db5a3267",
+  "binary_origin": "Official portable release; bundled DLL hash verified equal",
+  "native_source_changes": [],
+  "supplemental_kissfft_notices": {
+    "source": "https://github.com/mborgerding/kissfft/tree/131.1.0",
+    "reason": "Original vendored headers declare BSD-3-Clause and refer to missing COPYING"
+  },
+  "notice_hash_encoding": "UTF-8 with normalized LF line endings",
+  "notice_sha256": {
+    "aubio-AUTHORS.txt": "dc0c6b98240b34d236ebe87b63173ed9d888af774e1dc6e9337fe1084166c7fb",
+    "aubio-GPL-3.0.txt": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "dr_flac-LICENSE.txt": "1e3d12bc24ca40e24b24c1f71521d9cbb783bdc041eb827d84ca69ff66521ddb",
+    "dr_mp3-LICENSE.txt": "4ea3def338ae306dcb7d2add45053a9c015b77c538fc06868de019e9447177b9",
+    "dr_wav-LICENSE.txt": "1e3d12bc24ca40e24b24c1f71521d9cbb783bdc041eb827d84ca69ff66521ddb",
+    "KissFFT-BSD-3-Clause.txt": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed",
+    "KissFFT-COPYING.txt": "5a6a42c9495a3564ef0607288c85739caae12d9589c1399a0bd448830c87d5b2",
+    "SeamlessLoopMusic-MIT.txt": "1b7806e2380472387477ccc9ebb7b327a938d9962c212b003e8e1cbf89ea77cc",
+    "stb_vorbis-LICENSE.txt": "0459bce8ce9b9b045d20d9c48192226d302f0cce81b151ba71189b2a10c8a8fc"
+  }
+}
