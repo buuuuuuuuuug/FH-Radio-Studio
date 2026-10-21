@@ -1,3 +1,4 @@
+import 'widgets/feature_tour.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,7 +24,10 @@ Future<void> main() async {
 
   runApp(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        automaticFeatureToursProvider.overrideWithValue(true),
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ],
       child: const FhRadioStudioApp(),
     ),
   );

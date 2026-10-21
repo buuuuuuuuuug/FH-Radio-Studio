@@ -4101,6 +4101,33 @@ class StudioController extends StateNotifier<StudioState> {
     );
   }
 
+  List<PackageBuildLoudnessPreview> buildPackageLoudnessPreviews() {
+    final first = buildPackageLoudnessPreview();
+    final metadata = TrackMetadataCache.read(state.projectDir);
+    final sources = <String, String>{
+      for (final source in [
+        if (first.source != null) first.source!,
+        ...state.musicPaths,
+      ])
+        if (File(source).existsSync()) canonicalPathKey(source): source,
+    };
+    return [
+      for (final entry in sources.entries)
+        PackageBuildLoudnessPreview(
+          referenceMedianLufs: first.referenceMedianLufs,
+          initialOffsetLu: first.initialOffsetLu,
+          currentPackageOffsetLu: first.currentPackageOffsetLu,
+          source: entry.value,
+          previewTitle: metadata[entry.key]?.title,
+          previewArtist: metadata[entry.key]?.artist,
+          previewInputLufs:
+              metadata[entry.key]?.integratedLufs ?? first.referenceMedianLufs,
+          previewInputLufsHeuristic:
+              metadata[entry.key]?.integratedLufs == null,
+        ),
+    ];
+  }
+
   Future<Map<String, dynamic>> estimatePackageSizes(PlaylistPlan plan) async {
     final project = state.projectDir;
     var planForEstimate = plan;

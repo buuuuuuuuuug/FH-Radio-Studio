@@ -1,3 +1,4 @@
+import 'package:fh_radio_studio/widgets/rm_slider.dart';
 import 'package:fh_radio_studio/core/playlist_capacity.dart';
 import 'package:fh_radio_studio/state/playlist_capacity.dart';
 import 'dart:io';
@@ -438,8 +439,10 @@ void main() {
       );
       await tester.tap(find.text('试听设置'));
       await tester.pumpAndSettle();
-      expect(find.text('循环试听设置'), findsOneWidget);
-      final slider = find.byType(Slider).last;
+      expect(find.text('试听设置'), findsNWidgets(2));
+      final slider = find.byType(RmSlider).last;
+      await tester.ensureVisible(slider);
+      await tester.pumpAndSettle();
       await tester.tapAt(tester.getCenter(slider));
       await tester.pumpAndSettle();
       expect(prefs.getDouble('rm.audition.volume'), lessThan(100));

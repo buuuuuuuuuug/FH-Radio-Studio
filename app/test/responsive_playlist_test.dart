@@ -67,47 +67,46 @@ void main() {
     },
   );
   for (final width in [680.0, 900.0, 1200.0]) {
-    testWidgets(
-      'song header fits $width and only highlights an interacted group',
-      (t) async {
-        viewport(t, Size(width, 1000));
-        final f = await editor.fixture();
-        await t.pumpWidget(
-          UncontrolledProviderScope(
-            container: f.container,
-            child: helpers.app(
-              const ReplaceEditorScreen(trackId: 'p1', enableAudio: false),
-            ),
+    testWidgets('song header fits $width and does not keep a click highlight', (
+      t,
+    ) async {
+      viewport(t, Size(width, 1000));
+      final f = await editor.fixture();
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: f.container,
+          child: helpers.app(
+            const ReplaceEditorScreen(trackId: 'p1', enableAudio: false),
           ),
-        );
-        await t.pumpAndSettle();
-        expect(find.text('来源文件'), findsNothing);
-        expect(find.text('导出此曲配置'), findsNothing);
-        expect(find.byKey(const ValueKey('waveform-toggle-段落')), findsNothing);
-        expect(find.text('双击人工精修 · Ctrl+右键快速确认'), findsOneWidget);
-        final gradients = find.descendant(
-          of: find.byType(ProgressStrip),
-          matching: find.byWidgetPredicate(
-            (w) =>
-                w is Container &&
-                w.decoration is BoxDecoration &&
-                (w.decoration as BoxDecoration).gradient != null,
-          ),
-        );
-        expect(gradients, findsNothing);
-        final save = t.getRect(find.byKey(const ValueKey('editor-save')));
-        final chip = t.getRect(
-          find.byKey(const ValueKey('editor-assignment-status')),
-        );
-        expect(chip.overlaps(save), isFalse);
-        expect(save.right, lessThanOrEqualTo(width));
-        await t.tap(find.byKey(const ValueKey('editor-progress-PD')));
-        await t.pump(const Duration(milliseconds: 350));
-        await t.pumpAndSettle();
-        expect(gradients, findsOneWidget);
-        expect(t.takeException(), isNull);
-      },
-    );
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(find.text('来源文件'), findsNothing);
+      expect(find.text('导出此曲配置'), findsNothing);
+      expect(find.byKey(const ValueKey('waveform-toggle-段落')), findsNothing);
+      expect(find.text('双击人工精修'), findsOneWidget);
+      final gradients = find.descendant(
+        of: find.byType(ProgressStrip),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.decoration is BoxDecoration &&
+              (w.decoration as BoxDecoration).gradient != null,
+        ),
+      );
+      expect(gradients, findsNothing);
+      final save = t.getRect(find.byKey(const ValueKey('editor-save')));
+      final chip = t.getRect(
+        find.byKey(const ValueKey('editor-assignment-status')),
+      );
+      expect(chip.overlaps(save), isFalse);
+      expect(save.right, lessThanOrEqualTo(width));
+      await t.tap(find.byKey(const ValueKey('editor-progress-PD')));
+      await t.pump(const Duration(milliseconds: 350));
+      await t.pumpAndSettle();
+      expect(gradients, findsNothing);
+      expect(t.takeException(), isNull);
+    });
   }
   testWidgets('Ctrl S uses the same save as the song toolbar', (t) async {
     viewport(t, const Size(1365, 1000));
@@ -228,7 +227,7 @@ void main() {
       await helpers.keyCombo(t, LogicalKeyboardKey.keyS, ctrl: true);
       await t.pump();
       expect(c.read(playlistPlanProvider.notifier).dirty, isFalse);
-      expect(find.text('歌曲分配与顺序已保存，无需构建准备包。'), findsOneWidget);
+      expect(find.text('歌曲分配与顺序已保存。'), findsOneWidget);
       expect(t.takeException(), isNull);
     },
   );

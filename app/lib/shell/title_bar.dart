@@ -1,3 +1,4 @@
+import '../widgets/feature_tour.dart';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,7 +10,6 @@ import '../state/router.dart';
 import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import '../theme/tokens.dart';
-import '../widgets/rm_button.dart';
 import '../widgets/rm_icon.dart';
 
 class TitleBar extends ConsumerWidget {
@@ -79,14 +79,7 @@ class TitleBar extends ConsumerWidget {
           const SizedBox(width: 14),
           Text('项目已打开', style: RmText.sans(11.5, color: rm.fg3)),
           const SizedBox(width: 14),
-          RmButton(
-            onPressed: onCommandTap,
-            size: RmButtonSize.sm,
-            variant: RmButtonVariant.ghost,
-            leading: const RmIcon('command', size: 12),
-            tooltip: '命令面板',
-            label: 'K',
-          ),
+          const FeatureTourButton(iconOnly: true),
         ],
       ),
     );

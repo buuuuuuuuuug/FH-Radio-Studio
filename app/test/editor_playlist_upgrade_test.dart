@@ -731,6 +731,7 @@ void main() {
 Future<({Directory dir, ProviderContainer container})> fixture() async {
   final dir = Directory.systemTemp.createTempSync('studio_upgrade_');
   FhRadioStudioProject.ensure(dir.path);
+  FhRadioStudioProject.writeSettings(dir.path, slmEnabled: false);
   final baseline = File(
     p.join(dir.path, 'backups', 'baseline-current', 'baseline_manifest.json'),
   );

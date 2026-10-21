@@ -1,3 +1,4 @@
+import 'package:fh_radio_studio/core/project_workspace.dart';
 import 'package:fh_radio_studio/screens/replace_editor/transport_bar.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -1261,6 +1262,7 @@ Future<void> _pumpEditor(
   double chromeHeight = 0,
   List<Override> overrides = const [],
 }) async {
+  FhRadioStudioProject.writeSettings(projectDir, slmEnabled: false);
   SharedPreferences.setMockInitialValues({
     'rm.studio.projectDir': projectDir,
     'rm.studio.repoRoot': p.dirname(p.current),

@@ -1,3 +1,7 @@
+import '../core/playlist_plan.dart';
+import 'cross_radio_assignment_notice.dart';
+import 'rm_select.dart';
+import 'rm_slider.dart';
 import 'package_quality_panel.dart';
 import 'dart:async';
 import 'dart:io';
@@ -21,6 +25,8 @@ Future<double?> showPackageLoudnessDialog(
   required double initialOffsetLu,
   required double previewInputLufs,
   String? previewSource,
+  List<PackageBuildLoudnessPreview> previewTracks = const [],
+  PlaylistPlan? assignmentPlan,
   String? previewTitle,
   String? previewArtist,
   double? currentPackageOffsetLu,
@@ -35,6 +41,8 @@ Future<double?> showPackageLoudnessDialog(
       initialOffsetLu: initialOffsetLu,
       previewInputLufs: previewInputLufs,
       previewSource: previewSource,
+      previewTracks: previewTracks,
+      assignmentPlan: assignmentPlan,
       previewTitle: previewTitle,
       previewArtist: previewArtist,
       currentPackageOffsetLu: currentPackageOffsetLu,
@@ -51,6 +59,8 @@ class PackageLoudnessDialog extends StatefulWidget {
     required this.initialOffsetLu,
     required this.previewInputLufs,
     this.previewSource,
+    this.previewTracks = const [],
+    this.assignmentPlan,
     this.previewTitle,
     this.previewArtist,
     this.currentPackageOffsetLu,
@@ -62,6 +72,8 @@ class PackageLoudnessDialog extends StatefulWidget {
   final double initialOffsetLu;
   final double previewInputLufs;
   final String? previewSource;
+  final List<PackageBuildLoudnessPreview> previewTracks;
+  final PlaylistPlan? assignmentPlan;
   final String? previewTitle;
   final String? previewArtist;
   final double? currentPackageOffsetLu;
@@ -74,11 +86,17 @@ class PackageLoudnessDialog extends StatefulWidget {
 
 class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
   late double _offsetLu;
+  PackageBuildLoudnessPreview? _selectedPreview;
 
   @override
   void initState() {
     super.initState();
     _offsetLu = _nearestPackageLoudnessOffset(widget.initialOffsetLu);
+    _selectedPreview =
+        widget.previewTracks
+            .where((track) => track.source == widget.previewSource)
+            .firstOrNull ??
+        widget.previewTracks.firstOrNull;
   }
 
   @override
@@ -131,7 +149,7 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              '响度战争',
+                              '响度调整',
                               style: RmText.sans(
                                 11,
                                 weight: FontWeight.w600,
@@ -149,7 +167,7 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
                               ),
                             ),
                             Text(
-                              'LOUDNESS WAR',
+                              'LOUDNESS',
                               style: RmText.mono(
                                 10.5,
                                 weight: FontWeight.w500,
@@ -218,6 +236,19 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (widget.assignmentPlan?.crossRadioAssignments.isNotEmpty ??
+                      false) ...[
+                    CrossRadioAssignmentNotice(
+                      plan: widget.assignmentPlan!,
+                      titleForSource: (source) =>
+                          widget.previewTracks
+                              .where((t) => t.source == source)
+                              .firstOrNull
+                              ?.previewTitle ??
+                          source,
+                    ),
+                    const SizedBox(height: 14),
+                  ],
                   _LoudnessSnapSlider(
                     referenceMedianLufs: widget.referenceMedianLufs,
                     offsetLu: _offsetLu,
@@ -227,11 +258,44 @@ class _PackageLoudnessDialogState extends State<PackageLoudnessDialog> {
                     },
                   ),
                   const SizedBox(height: 14),
+                  if (widget.previewTracks.length > 1) ...[
+                    Row(
+                      children: [
+                        Text('试听歌曲', style: RmText.sans(12, color: rm.fg3)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: RmSelect<String>(
+                            key: const ValueKey('loudness-preview-track'),
+                            value: _selectedPreview!.source!,
+                            items: {
+                              for (final t in widget.previewTracks)
+                                t.source!:
+                                    '${t.previewArtist ?? ''} / ${t.previewTitle ?? File(t.source!).uri.pathSegments.last}',
+                            },
+                            onChanged: (source) => setState(
+                              () => _selectedPreview = widget.previewTracks
+                                  .firstWhere((t) => t.source == source),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   _LoudnessPreviewPlayer(
-                    source: widget.previewSource,
-                    title: widget.previewTitle,
-                    artist: widget.previewArtist,
-                    inputLufs: widget.previewInputLufs,
+                    key: ValueKey(
+                      _selectedPreview?.source ?? widget.previewSource,
+                    ),
+                    source: _selectedPreview?.source ?? widget.previewSource,
+                    title: _selectedPreview == null
+                        ? widget.previewTitle
+                        : _selectedPreview!.previewTitle,
+                    artist: _selectedPreview == null
+                        ? widget.previewArtist
+                        : _selectedPreview!.previewArtist,
+                    inputLufs:
+                        _selectedPreview?.previewInputLufs ??
+                        widget.previewInputLufs,
                     offsetLu: _offsetLu,
                     targetLufs: targetLufs,
                   ),
@@ -819,6 +883,7 @@ class _CurrentPackagePill extends StatelessWidget {
 
 class _LoudnessPreviewPlayer extends StatefulWidget {
   const _LoudnessPreviewPlayer({
+    super.key,
     required this.source,
     required this.title,
     required this.artist,
@@ -851,6 +916,7 @@ class _LoudnessPreviewPlayerState extends State<_LoudnessPreviewPlayer> {
   bool _loading = false;
   bool _loadFailed = false;
   bool _initialSeekDone = false;
+  double? _seekingPosition;
 
   @override
   void initState() {
@@ -936,12 +1002,25 @@ class _LoudnessPreviewPlayerState extends State<_LoudnessPreviewPlayer> {
   Future<void> _setPreviewVolume() async {
     final player = _player;
     if (player == null) return;
-    await player.setVolume(
-      previewMpvVolume(
-        targetLufs: widget.targetLufs,
-        inputLufs: widget.inputLufs,
-      ),
-    );
+    try {
+      await player.setVolume(
+        previewMpvVolume(
+          targetLufs: widget.targetLufs,
+          inputLufs: widget.inputLufs,
+        ),
+      );
+    } on Object {
+      _previewFailed(player);
+    }
+  }
+
+  void _previewFailed(Player player) {
+    if (mounted && identical(player, _player)) {
+      setState(() {
+        _loadFailed = true;
+        _seekingPosition = null;
+      });
+    }
   }
 
   Future<void> _seekToMiddle(Duration duration) async {
@@ -952,7 +1031,31 @@ class _LoudnessPreviewPlayerState extends State<_LoudnessPreviewPlayer> {
       milliseconds: (duration.inMilliseconds * 0.5).round(),
     );
     if (mounted) setState(() => _position = next);
-    await player.seek(next);
+    try {
+      await player.seek(next);
+    } on Object {
+      _previewFailed(player);
+    }
+  }
+
+  Future<void> _seekToPosition(double seconds) async {
+    final player = _player;
+    if (player == null || !_loaded) return;
+    final position = Duration(
+      milliseconds: (seconds.clamp(0, _duration.inMilliseconds / 1000) * 1000)
+          .round(),
+    );
+    try {
+      await player.seek(position);
+      if (mounted && identical(player, _player)) {
+        setState(() {
+          _position = position;
+          _seekingPosition = null;
+        });
+      }
+    } on Object {
+      _previewFailed(player);
+    }
   }
 
   Future<void> _toggle() async {
@@ -960,15 +1063,19 @@ class _LoudnessPreviewPlayerState extends State<_LoudnessPreviewPlayer> {
     await _ensureLoaded();
     final player = _player;
     if (player == null || !_loaded) return;
-    if (_playing) {
-      await player.pause();
-      return;
+    try {
+      if (_playing) {
+        await player.pause();
+        return;
+      }
+      if (_duration > Duration.zero &&
+          _position >= _duration - const Duration(milliseconds: 100)) {
+        await player.seek(Duration.zero);
+      }
+      if (mounted && identical(player, _player)) await player.play();
+    } on Object {
+      _previewFailed(player);
     }
-    if (_duration > Duration.zero &&
-        _position >= _duration - const Duration(milliseconds: 100)) {
-      await player.seek(Duration.zero);
-    }
-    await player.play();
   }
 
   void _resetPlayer() {
@@ -1061,9 +1168,43 @@ class _LoudnessPreviewPlayerState extends State<_LoudnessPreviewPlayer> {
                   Row(
                     children: [
                       Expanded(
-                        child: _PreviewVuStrip(
-                          playing: _playing,
-                          seed: _position.inMilliseconds ~/ 120,
+                        child: SizedBox(
+                          height: 28,
+                          child: RmSlider(
+                            key: const ValueKey('loudness-preview-position'),
+                            activeColor: rm.accent.base,
+                            inactiveColor: rm.border,
+                            min: 0,
+                            max: math.max(1.0, _duration.inMilliseconds / 1000),
+                            value:
+                                (_seekingPosition ??
+                                        _position.inMilliseconds / 1000)
+                                    .clamp(
+                                      0,
+                                      math.max(
+                                        1.0,
+                                        _duration.inMilliseconds / 1000,
+                                      ),
+                                    ),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            label: '试听位置',
+                            semanticFormatterCallback: (value) =>
+                                _formatDuration(
+                                  Duration(
+                                    milliseconds: (value * 1000).round(),
+                                  ),
+                                ),
+                            onChangeStart: (_) => setState(
+                              () => _seekingPosition =
+                                  _position.inMilliseconds / 1000,
+                            ),
+                            onChanged: _duration > Duration.zero
+                                ? (value) =>
+                                      setState(() => _seekingPosition = value)
+                                : null,
+                            onChangeEnd: (value) =>
+                                unawaited(_seekToPosition(value)),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -1193,55 +1334,6 @@ class _PreviewPlayButton extends StatelessWidget {
     return Tooltip(
       message: enabled ? (playing ? '暂停预览' : '播放预览') : '无可预览音频',
       child: button,
-    );
-  }
-}
-
-class _PreviewVuStrip extends StatelessWidget {
-  const _PreviewVuStrip({required this.playing, required this.seed});
-
-  final bool playing;
-  final int seed;
-
-  static const _barCount = 56;
-
-  double _heightFor(int index) {
-    final baseSeed = playing ? seed : 1;
-    final phase = math.sin((index + baseSeed) * 0.83) * 0.5 + 0.5;
-    final phase2 = math.cos((index + baseSeed) * 1.47) * 0.5 + 0.5;
-    final base = 0.18 + phase * 0.55 + phase2 * 0.24;
-    return base.clamp(0.14, 1.0).toDouble();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final rm = context.rm;
-    return SizedBox(
-      height: 18,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          for (var i = 0; i < _barCount; i += 1) ...[
-            Expanded(
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeOutCubic,
-                  height: 18 * _heightFor(i),
-                  decoration: BoxDecoration(
-                    color: playing
-                        ? rm.accent.base.withAlpha(215)
-                        : rm.borderStrong,
-                    borderRadius: BorderRadius.circular(1),
-                  ),
-                ),
-              ),
-            ),
-            if (i != _barCount - 1) const SizedBox(width: 2),
-          ],
-        ],
-      ),
     );
   }
 }

@@ -30,7 +30,7 @@ class OpenPackageFolderButton extends ConsumerWidget {
     final available = folder?.existsSync() ?? false;
     return RmButton(
       key: const ValueKey('open-built-package-folder'),
-      label: '打开准备包',
+      label: '打开准备包文件夹',
       leading: RmIcon('folder', size: 12, color: context.rm.fg2),
       tooltip: available ? folder!.path : '尚无已构建的准备包目录',
       onPressed: !available

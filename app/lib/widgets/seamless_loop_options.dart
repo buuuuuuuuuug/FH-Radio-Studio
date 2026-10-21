@@ -55,7 +55,7 @@ class SeamlessLoopOptions extends ConsumerWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '自动寻找衔接自然的 TL / PL 循环起止点，替换原循环分析；无 AI 模式也可用。',
+                    '更专注音高与响度衔接，寻找自然的 TL / PL 循环；无需加载重型 AI，无 AI 模式也可用，推荐启用。',
                     style: RmText.sans(11.5, color: rm.fg3),
                   ),
                   const SizedBox(height: 6),

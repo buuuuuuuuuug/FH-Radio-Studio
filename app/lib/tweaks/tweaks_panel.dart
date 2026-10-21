@@ -1,3 +1,4 @@
+import '../widgets/feature_tour.dart';
 import '../widgets/editor_shortcuts_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -50,23 +51,47 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _section(context, '主题', _themeSection(context)),
+              _section(
+                context,
+                '主题',
+                _themeSection(context),
+              ).tourAnchor('look'),
               _divider(context),
               _section(context, '强调色', _accentSection(context)),
               _divider(context),
-              _section(context, '导航布局', _navSection(context)),
+              _section(
+                context,
+                '导航布局',
+                _navSection(context),
+              ).tourAnchor('look-end'),
               _divider(context),
-              _section(context, '界面宽度', const PageWidthControl()),
+              _section(
+                context,
+                '界面宽度',
+                const PageWidthControl(),
+              ).tourAnchor('size'),
               _divider(context),
-              _section(context, '人工精修窗口宽度', const ManualRefineWidthControl()),
+              _section(
+                context,
+                '人工精修窗口宽度',
+                const ManualRefineWidthControl(),
+              ).tourAnchor('size-end'),
               _divider(context),
-              _section(context, '快捷键', const EditorShortcutsButton()),
+              _section(
+                context,
+                '快捷键',
+                const EditorShortcutsButton(),
+              ).tourAnchor('help'),
               _divider(context),
-              _section(context, '功能', _sirenSection(context)),
+              _section(
+                context,
+                '功能',
+                _sirenSection(context),
+              ).tourAnchor('help-end'),
             ],
           ),
         ),
-      );
+      ).withFeatureTour(TourPage.settings);
     }
     return SingleChildScrollView(
       child: Center(
@@ -83,24 +108,50 @@ class _TweaksPanelState extends ConsumerState<TweaksPanel> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text('设置', style: RmText.pageH1(color: rm.fg)),
-              _section(context, '主题', _themeSection(context)),
+              _section(
+                context,
+                '主题',
+                _themeSection(context),
+              ).tourAnchor('look'),
               _divider(context),
               _section(context, '强调色', _accentSection(context)),
               _divider(context),
-              _section(context, '导航布局', _navSection(context)),
+              _section(
+                context,
+                '导航布局',
+                _navSection(context),
+              ).tourAnchor('look-end'),
               _divider(context),
-              _section(context, '界面宽度', const PageWidthControl()),
+              _section(
+                context,
+                '界面宽度',
+                const PageWidthControl(),
+              ).tourAnchor('size'),
               _divider(context),
-              _section(context, '人工精修窗口宽度', const ManualRefineWidthControl()),
+              _section(
+                context,
+                '人工精修窗口宽度',
+                const ManualRefineWidthControl(),
+              ).tourAnchor('size-end'),
               _divider(context),
-              _section(context, '快捷键', const EditorShortcutsButton()),
+              _section(
+                context,
+                '快捷键',
+                const EditorShortcutsButton(),
+              ).tourAnchor('help'),
+              _divider(context),
+              _section(
+                context,
+                '功能',
+                _sirenSection(context),
+              ).tourAnchor('help-end'),
               _divider(context),
               _section(context, '跳转', _routeSection(context)),
             ],
           ),
         ),
       ),
-    );
+    ).withFeatureTour(TourPage.settings);
   }
 
   Widget _section(BuildContext context, String label, Widget body) {

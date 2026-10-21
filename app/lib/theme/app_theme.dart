@@ -1,3 +1,4 @@
+import 'rainbow_border.dart';
 import 'package:flutter/material.dart';
 
 import 'accents.dart';
@@ -192,10 +193,7 @@ ThemeData buildAppTheme({
       backgroundColor: rm.panel,
       contentTextStyle: RmText.sans(13, color: rm.fg, height: 1.5),
       elevation: 8,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(RmTokens.rLg),
-        side: BorderSide(color: rm.border2),
-      ),
+      shape: const RainbowBorder(),
       insetPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       showCloseIcon: true,
       closeIconColor: rm.fg2,

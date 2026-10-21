@@ -9,31 +9,22 @@ import '../../theme/tokens.dart';
 import '../../widgets/rm_icon.dart';
 import 'replace_state.dart';
 
-/// 4 宫格 progress strip（TD/PD/TL/PL，按这个顺序显示）。
-class ProgressStrip extends StatefulWidget {
+/// 4 宫格 progress strip（TD/TL/PD/PL，按这个顺序显示）。
+class ProgressStrip extends StatelessWidget {
   const ProgressStrip({
     super.key,
     required this.state,
     this.onSelect,
     this.onManualRefine,
     this.onQuickConfirm,
+    this.onPreview,
   });
 
   final ReplaceEditorState state;
-  final ValueChanged<GroupKind>? onSelect, onManualRefine, onQuickConfirm;
-
-  @override
-  State<ProgressStrip> createState() => _ProgressStripState();
-}
-
-class _ProgressStripState extends State<ProgressStrip> {
-  GroupKind? selectedGroup;
-  ReplaceEditorState get state => widget.state;
-  @override
-  void didUpdateWidget(covariant ProgressStrip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.state.trackId != state.trackId) selectedGroup = null;
-  }
+  final ValueChanged<GroupKind>? onSelect,
+      onManualRefine,
+      onQuickConfirm,
+      onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -46,17 +37,17 @@ class _ProgressStripState extends State<ProgressStrip> {
         value: formatEditorTimecode(state.td.t),
       ),
       _Cell(
-        kind: GroupKind.pd,
-        label: 'PostDrop · 冲线后',
-        confirmed: state.pdConfirmed,
-        value: formatEditorTimecode(state.pd.t),
-      ),
-      _Cell(
         kind: GroupKind.tl,
         label: 'TrackLoop · 比赛循环',
         confirmed: state.tlConfirmed,
         value:
             '${formatEditorTimecode(state.tl.start)} → ${formatEditorTimecode(state.tl.end)}',
+      ),
+      _Cell(
+        kind: GroupKind.pd,
+        label: 'PostDrop · 冲线后',
+        confirmed: state.pdConfirmed,
+        value: formatEditorTimecode(state.pd.t),
       ),
       _Cell(
         kind: GroupKind.pl,
@@ -78,7 +69,7 @@ class _ProgressStripState extends State<ProgressStrip> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('双击人工精修 · Ctrl+右键快速确认', style: RmText.sans(10.5, color: rm.fg3)),
+          Text('双击人工精修', style: RmText.sans(10.5, color: rm.fg3)),
           const SizedBox(height: 8),
           LayoutBuilder(
             builder: (context, c) {
@@ -94,17 +85,10 @@ class _ProgressStripState extends State<ProgressStrip> {
                       width: cellW,
                       child: _ProgressCell(
                         cell: cell,
-                        selected: selectedGroup == cell.kind,
-                        onSelect: () {
-                          setState(() => selectedGroup = cell.kind);
-                          widget.onSelect?.call(cell.kind);
-                        },
-                        onManualRefine: () {
-                          setState(() => selectedGroup = cell.kind);
-                          widget.onManualRefine?.call(cell.kind);
-                        },
-                        onQuickConfirm: () =>
-                            widget.onQuickConfirm?.call(cell.kind),
+                        onSelect: () => onSelect?.call(cell.kind),
+                        onManualRefine: () => onManualRefine?.call(cell.kind),
+                        onPreview: () => onPreview?.call(cell.kind),
+                        onQuickConfirm: () => onQuickConfirm?.call(cell.kind),
                       ),
                     ),
                 ],
@@ -133,121 +117,140 @@ class _Cell {
 class _ProgressCell extends StatefulWidget {
   const _ProgressCell({
     required this.cell,
-    required this.selected,
     required this.onSelect,
+    required this.onPreview,
     required this.onManualRefine,
     required this.onQuickConfirm,
   });
   final _Cell cell;
-  final bool selected;
-  final VoidCallback onSelect, onManualRefine, onQuickConfirm;
+  final VoidCallback onSelect, onManualRefine, onQuickConfirm, onPreview;
   @override
   State<_ProgressCell> createState() => _ProgressCellState();
 }
 
 class _ProgressCellState extends State<_ProgressCell> {
   bool hovered = false;
+  bool _controlAtPointerDown = false;
   _Cell get cell => widget.cell;
 
   @override
   Widget build(BuildContext context) {
     final rm = context.rm;
     final confirmed = cell.confirmed;
-    final active = widget.selected || hovered;
+    final active = hovered;
     return Semantics(
       button: true,
-      selected: widget.selected,
-      label: '${cell.kind.code}，双击人工选点；Ctrl+鼠标右键快速确认',
+      label: '${cell.kind.code}，双击人工选点；Ctrl+鼠标左键试听；Ctrl+鼠标右键快速确认',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => hovered = true),
         onExit: (_) => setState(() => hovered = false),
-        child: GestureDetector(
-          key: ValueKey('editor-progress-${cell.kind.code}'),
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onSelect,
-          onDoubleTap: widget.onManualRefine,
-          onSecondaryTap: () {
-            if (!cell.confirmed && HardwareKeyboard.instance.isControlPressed) {
-              widget.onQuickConfirm();
+        child: Listener(
+          onPointerDown: (event) {
+            if (event.buttons == 1) {
+              _controlAtPointerDown =
+                  HardwareKeyboard.instance.isControlPressed;
             }
           },
-          child: Container(
-            padding: const EdgeInsets.all(1),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(RmTokens.rSm),
-              gradient: active
-                  ? const SweepGradient(
-                      colors: [
-                        Color(0xFFFF3CAC),
-                        Color(0xFFFFA928),
-                        Color(0xFF00F5A0),
-                        Color(0xFF00D9FF),
-                        Color(0xFF6C63FF),
-                        Color(0xFFFF3CAC),
-                      ],
-                    )
-                  : null,
-            ),
+          child: GestureDetector(
+            key: ValueKey('editor-progress-${cell.kind.code}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (_controlAtPointerDown) {
+                widget.onPreview();
+              } else {
+                widget.onSelect();
+              }
+            },
+            onDoubleTap: () => _controlAtPointerDown
+                ? widget.onPreview()
+                : widget.onManualRefine(),
+            onSecondaryTap: () {
+              if (!cell.confirmed &&
+                  HardwareKeyboard.instance.isControlPressed) {
+                widget.onQuickConfirm();
+              }
+            },
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.all(1),
               decoration: BoxDecoration(
-                color: confirmed
-                    ? Color.alphaBlend(rm.accent.bg, rm.panel)
-                    : rm.raised,
-                border: Border.all(
-                  color: active
-                      ? Colors.transparent
-                      : confirmed
-                      ? rm.accent.ring
-                      : rm.borderStrong,
-                ),
                 borderRadius: BorderRadius.circular(RmTokens.rSm),
+                gradient: active
+                    ? const SweepGradient(
+                        colors: [
+                          Color(0xFFFF3CAC),
+                          Color(0xFFFFA928),
+                          Color(0xFF00F5A0),
+                          Color(0xFF00D9FF),
+                          Color(0xFF6C63FF),
+                          Color(0xFFFF3CAC),
+                        ],
+                      )
+                    : null,
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          cell.kind.code,
-                          style: RmText.mono(
-                            11,
-                            weight: FontWeight.w600,
-                            letterSpacing: 0.05 * 11,
-                            color: confirmed ? rm.accent.base : rm.fg2,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: confirmed
+                      ? Color.alphaBlend(rm.accent.bg, rm.panel)
+                      : rm.raised,
+                  border: Border.all(
+                    color: active
+                        ? Colors.transparent
+                        : confirmed
+                        ? rm.accent.ring
+                        : rm.borderStrong,
+                  ),
+                  borderRadius: BorderRadius.circular(RmTokens.rSm),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            cell.kind.code,
+                            style: RmText.mono(
+                              11,
+                              weight: FontWeight.w600,
+                              letterSpacing: 0.05 * 11,
+                              color: confirmed ? rm.accent.base : rm.fg2,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          cell.label,
-                          style: RmText.sans(11.5, color: rm.fg3),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          cell.value,
-                          style: RmText.mono(10.5, color: rm.fg3),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: confirmed ? rm.accent.base : Colors.transparent,
-                      border: Border.all(
-                        color: confirmed ? rm.accent.base : rm.borderStrong,
+                          const SizedBox(height: 2),
+                          Text(
+                            cell.label,
+                            style: RmText.sans(11.5, color: rm.fg3),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            cell.value,
+                            style: RmText.mono(10.5, color: rm.fg3),
+                          ),
+                        ],
                       ),
-                      shape: BoxShape.circle,
                     ),
-                    alignment: Alignment.center,
-                    child: confirmed
-                        ? RmIcon('check', size: 10, color: rm.accent.onAccent)
-                        : null,
-                  ),
-                ],
+                    Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: confirmed ? rm.accent.base : Colors.transparent,
+                        border: Border.all(
+                          color: confirmed ? rm.accent.base : rm.borderStrong,
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: confirmed
+                          ? RmIcon('check', size: 10, color: rm.accent.onAccent)
+                          : null,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

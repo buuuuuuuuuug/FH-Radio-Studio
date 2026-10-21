@@ -14,9 +14,11 @@ class BatchAssignmentInfo {
     required this.added,
     required this.limit,
     required this.replacesBuiltin,
+    this.crossRadioCount = 0,
   });
   final int total, added, limit;
   final bool replacesBuiltin;
+  final int crossRadioCount;
 }
 
 class BatchAssignmentDialog extends StatefulWidget {
@@ -123,6 +125,14 @@ class _BatchAssignmentDialogState extends State<BatchAssignmentDialog> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (info.crossRadioCount > 0)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Text(
+                                '${info.crossRadioCount} 首歌曲也分配在其他电台；原分配会保留，每个电台分别收录，增加准备包体积。',
+                                style: RmText.sans(12, color: rm.warn),
+                              ),
+                            ),
                           Text(
                             '分配 ${widget.tracks.length} 首歌曲',
                             style: RmText.modalH2(color: rm.fg),

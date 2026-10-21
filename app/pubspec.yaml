@@ -1,7 +1,7 @@
 name: fh_radio_studio
 description: "FH Radio Studio - third-party FH radio editor for PC"
 publish_to: 'none'
-version: 0.2.1-rc.1+75
+version: 0.2.1-improve.2+76
 
 environment:
   sdk: ^3.10.7
@@ -32,5 +32,6 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/audio/looplab_demo.wav
     - assets/images/app_logo.png
     - assets/images/monster_siren_share_logo.png

@@ -1,3 +1,5 @@
+import '../core/demo_song.dart';
+import '../widgets/feature_tour.dart';
 import '../widgets/quick_assign_dialog.dart';
 import '../widgets/timing_export_dialog.dart';
 import '../state/library_columns.dart';
@@ -185,9 +187,19 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
         await audition.start();
         return;
       }
+      final previewSeconds = ref
+          .read(auditionPreferencesProvider)
+          .pointDuration(group == 'pd');
+      final pointEnd = math.min(
+        start + previewSeconds,
+        player.state.duration.inMicroseconds / 1000000,
+      );
       final native = player.platform;
       if (native is NativePlayer) {
-        await (native as dynamic).setProperty('end', 'none');
+        await (native as dynamic).setProperty(
+          'end',
+          pointEnd.toStringAsFixed(6),
+        );
         await (native as dynamic).setProperty('ab-loop-a', 'no');
         await (native as dynamic).setProperty('ab-loop-b', 'no');
         if (loop) {
@@ -219,7 +231,10 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
       setState(() => _previewKey = key);
       await player.play();
       _previewTimer = Timer(
-        const Duration(seconds: 12),
+        Duration(
+          microseconds: ((pointEnd - start).clamp(0, previewSeconds) * 1000000)
+              .round(),
+        ),
         () => unawaited(_stopPreview()),
       );
       if (diagnosticPreview) {
@@ -324,6 +339,17 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                                     ),
                                     const SizedBox(height: 8),
                                     _sourceDirectories(context, all, cli),
+                                    if (DemoSong.sourceFor(cli.projectDir) !=
+                                        null)
+                                      const Padding(
+                                        padding: EdgeInsets.only(top: 12),
+                                        child: RmBanner(
+                                          kind: RmBannerKind.info,
+                                          title: '功能演示曲',
+                                          body:
+                                              '用于练习歌曲编辑与人工精修。完成介绍后，可用演示曲右侧的删除按钮移除。',
+                                        ),
+                                      ),
                                     const WaveformBatchProgress(),
                                     const SeamlessBatchProgress(),
                                     const SizedBox(height: 16),
@@ -391,6 +417,21 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
           ),
         ),
       ),
+    ).withFeatureTour(
+      TourPage.library,
+      enabled: !cli.busy,
+      onComplete: () {
+        if (ref.read(featureToursProvider).seen(TourPage.song)) return;
+        final demos = all.where(
+          (track) => DemoSong.matches(cli.projectDir, track.source),
+        );
+        if (demos.isNotEmpty && mounted) {
+          ref
+              .read(editorSongQueueProvider.notifier)
+              .begin(cli.projectDir, all.map((t) => t.id));
+          context.go(RmRoutes.editor(demos.first.id));
+        }
+      },
     );
   }
 
@@ -548,7 +589,7 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
         final controls = KeyedSubtree(
           key: const ValueKey('pool-library-actions'),
           child: actions,
-        );
+        ).tourAnchor('import');
         if (constraints.maxWidth >= actionsWidth + 16 + 220) {
           return Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -632,6 +673,33 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
     required bool sirenImporting,
   }) {
     final rm = context.rm;
+    Widget row(int i) => _PoolRow(
+      key: ValueKey('pool-row:${visible[i].id}'),
+      track: visible[i],
+      isLast: i == visible.length - 1,
+      divider: rm.border,
+      editingLocked: false,
+      editLockMessage: '',
+      latestPackage: latestPackage,
+      stagedAssignment: playlistPlan.assignmentForPath(visible[i].source),
+      gameAssignment: gameAssignmentPlan.assignmentForPath(visible[i].source),
+      gameAssignmentsKnown:
+          gameAssignmentsKnown &&
+          !uncertainGameSources.contains(
+            PlaylistAssignment.keyForPath(visible[i].source),
+          ),
+      onPreview: (group) => unawaited(_quickPreview(visible[i], group)),
+      previewKey: _previewKey,
+      onTap: () {
+        _poolFilters[cli.projectDir] = _filter;
+        unawaited(_stopPreview());
+        ref
+            .read(editorSongQueueProvider.notifier)
+            .begin(cli.projectDir, visible.map((t) => t.id));
+        context.go(RmRoutes.editor(visible[i].id));
+      },
+      onDelete: () => _confirmAndDeleteTrack(context, visible[i]),
+    );
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
@@ -686,7 +754,7 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                   ],
                 ),
               ],
-            ),
+            ).tourAnchor('browse'),
             child: Column(
               children: [
                 SongBrowseControls(
@@ -696,7 +764,7 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                     _browse = v;
                     _poolBrowse[cli.projectDir] = v;
                   }),
-                ),
+                ).tourAnchor('browse-end'),
                 _PoolHeaderRow(),
               ],
             ),
@@ -721,41 +789,20 @@ class _CustomPoolScreenState extends ConsumerState<CustomPoolScreen> {
                 bottom: BorderSide(color: rm.border),
               ),
             ),
-            sliver: SliverFixedExtentList.builder(
-              itemExtent: 72 * MediaQuery.textScalerOf(context).scale(1),
-              itemCount: visible.length,
-              itemBuilder: (context, i) => _PoolRow(
-                key: ValueKey('pool-row:${visible[i].id}'),
-                track: visible[i],
-                isLast: i == visible.length - 1,
-                divider: rm.border,
-                editingLocked: false,
-                editLockMessage: '',
-                latestPackage: latestPackage,
-                stagedAssignment: playlistPlan.assignmentForPath(
-                  visible[i].source,
+            sliver: SliverMainAxisGroup(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 72 * MediaQuery.textScalerOf(context).scale(1),
+                    child: row(0).tourAnchor('songs'),
+                  ),
                 ),
-                gameAssignment: gameAssignmentPlan.assignmentForPath(
-                  visible[i].source,
+                SliverFixedExtentList.builder(
+                  itemExtent: 72 * MediaQuery.textScalerOf(context).scale(1),
+                  itemCount: visible.length - 1,
+                  itemBuilder: (context, i) => row(i + 1),
                 ),
-                gameAssignmentsKnown:
-                    gameAssignmentsKnown &&
-                    !uncertainGameSources.contains(
-                      PlaylistAssignment.keyForPath(visible[i].source),
-                    ),
-                onPreview: (group) =>
-                    unawaited(_quickPreview(visible[i], group)),
-                previewKey: _previewKey,
-                onTap: () {
-                  _poolFilters[cli.projectDir] = _filter;
-                  unawaited(_stopPreview());
-                  ref
-                      .read(editorSongQueueProvider.notifier)
-                      .begin(cli.projectDir, visible.map((t) => t.id));
-                  context.go(RmRoutes.editor(visible[i].id));
-                },
-                onDelete: () => _confirmAndDeleteTrack(context, visible[i]),
-              ),
+              ],
             ),
           ),
       ],
@@ -1330,7 +1377,7 @@ class _PoolRowState extends ConsumerState<_PoolRow> {
                     width: layout.previewWidth,
                     child: Row(
                       children: [
-                        for (final group in const ['td', 'pd', 'tl', 'pl'])
+                        for (final group in const ['td', 'tl', 'pd', 'pl'])
                           Padding(
                             padding: const EdgeInsets.only(right: 4),
                             child: SizedBox(

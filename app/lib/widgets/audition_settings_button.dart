@@ -1,4 +1,3 @@
-import '../theme/tokens.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/audition_preferences.dart';
@@ -6,6 +5,10 @@ import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import 'rm_button.dart';
 import 'rm_icon.dart';
+import 'rm_panel.dart';
+import 'rm_select.dart';
+import 'rm_slider.dart';
+import 'timing_dialog_frame.dart';
 
 class AuditionSettingsButton extends StatelessWidget {
   const AuditionSettingsButton({super.key, this.compact = false});
@@ -19,7 +22,7 @@ class AuditionSettingsButton extends StatelessWidget {
     if (compact) {
       return RmButton.icon(
         icon: const RmIcon('settings', size: 12),
-        tooltip: '循环试听设置',
+        tooltip: '试听设置',
         onPressed: open,
       );
     }
@@ -61,7 +64,7 @@ class _AuditionSettingsDialog extends ConsumerWidget {
             ),
           ],
         ),
-        Slider(
+        RmSlider(
           value: value,
           min: min,
           max: max,
@@ -70,37 +73,49 @@ class _AuditionSettingsDialog extends ConsumerWidget {
         ),
       ],
     );
-    return Theme(
-      data: Theme.of(context).copyWith(
-        colorScheme: Theme.of(context).colorScheme.copyWith(
-          primary: rm.accent.base,
-          onPrimary: rm.accent.onAccent,
-          surface: rm.panel,
-        ),
-      ),
-      child: AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(RmTokens.rLg),
-          side: BorderSide(color: rm.border),
-        ),
-        backgroundColor: rm.panel,
-        surfaceTintColor: Colors.transparent,
-        title: Text(
-          '循环试听设置',
-          style: RmText.sans(15, weight: FontWeight.w600, color: rm.fg),
-        ),
-        content: SizedBox(
-          width: 350,
-          child: SingleChildScrollView(
+    return TimingDialogFrame(
+      title: '试听设置',
+      busy: false,
+      width: 500,
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '应用于下一次快速试听，不改变歌曲时间点。普通播放仅使用音量设置。',
+            style: RmText.sans(11.5, color: rm.fg3),
+          ),
+          const SizedBox(height: 16),
+          RmPanel(
+            title: '播放起点 · TD / PD',
             child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  '试听 B → A 的衔接；时间和次数应用于下一次试听，不改变歌曲点位。',
-                  style: RmText.sans(11.5, color: rm.fg3),
+                slider(
+                  'TD 比赛开始 · 试听时长',
+                  options.tdDuration,
+                  1,
+                  30,
+                  29,
+                  '秒',
+                  (v) => controller.update(tdDuration: v),
                 ),
-                const SizedBox(height: 16),
+                slider(
+                  'PD 冲线之后 · 试听时长',
+                  options.pdDuration,
+                  1,
+                  30,
+                  29,
+                  '秒',
+                  (v) => controller.update(pdDuration: v),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          RmPanel(
+            title: '循环拼接 · TL / PL',
+            child: Column(
+              children: [
                 slider(
                   '衔接前（B 前）',
                   options.before,
@@ -127,46 +142,41 @@ class _AuditionSettingsDialog extends ConsumerWidget {
                         style: RmText.sans(12, color: rm.fg2),
                       ),
                     ),
-                    DropdownButton<int>(
-                      value: options.repetitions,
-                      items: [
-                        for (final n in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-                          DropdownMenuItem(
-                            value: n,
-                            child: Text(
-                              n == 0 ? '持续试听' : '$n 次',
-                              style: RmText.sans(12, color: rm.fg),
-                            ),
-                          ),
-                      ],
-                      onChanged: (n) {
-                        if (n != null) controller.update(repetitions: n);
-                      },
+                    SizedBox(
+                      width: 124,
+                      child: RmSelect<int>(
+                        value: options.repetitions,
+                        items: {
+                          for (final n in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+                            n: n == 0 ? '持续试听' : '$n 次',
+                        },
+                        onChanged: (n) => controller.update(repetitions: n),
+                      ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-                slider(
-                  '试听音量',
-                  options.volume,
-                  0,
-                  100,
-                  20,
-                  '%',
-                  (v) => controller.update(volume: v),
                 ),
               ],
             ),
           ),
-        ),
-        actions: [
-          RmButton(
-            label: '完成',
-            variant: RmButtonVariant.primary,
-            onPressed: () => Navigator.pop(context),
+          const SizedBox(height: 12),
+          slider(
+            '试听音量',
+            options.volume,
+            0,
+            100,
+            20,
+            '%',
+            (v) => controller.update(volume: v),
           ),
         ],
       ),
+      actions: [
+        RmButton(
+          label: '完成',
+          variant: RmButtonVariant.primary,
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
     );
   }
 }

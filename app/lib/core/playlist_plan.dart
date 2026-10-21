@@ -149,6 +149,20 @@ class PlaylistPlan {
 
   bool get hasDraft => assignments.isNotEmpty || builtinTargets.isNotEmpty;
 
+  /// FreeRoam and Event in the same station do not count as multiple radios.
+  Map<String, List<PlaylistAssignment>> get crossRadioAssignments {
+    final grouped = <String, List<PlaylistAssignment>>{};
+    for (final a in assignments.values.where((a) => a.isAssigned)) {
+      grouped
+          .putIfAbsent(PlaylistAssignment.keyForPath(a.source), () => [])
+          .add(a);
+    }
+    grouped.removeWhere(
+      (_, items) => items.map((a) => a.radioCode).toSet().length < 2,
+    );
+    return grouped;
+  }
+
   bool hasBuiltinOverride(String radioCode, String playlistType) {
     return builtinTargets.contains(_targetKey(radioCode, playlistType));
   }

@@ -1,4 +1,8 @@
+import '../widgets/feature_tour.dart';
+import '../core/demo_song.dart';
 import 'dart:io';
+import 'dart:async';
+import '../core/project_workspace.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +33,7 @@ class ProjectPickerScreen extends ConsumerStatefulWidget {
 class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   bool _redirected = false;
   bool _choosingDirectory = false;
+  bool _creatingProject = false;
 
   bool _projectOperationActive(StudioState state) =>
       state.busy ||
@@ -36,7 +41,10 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
       state.projectPathMigrationRunning;
 
   bool _canChangeProject() {
-    if (!_projectOperationActive(ref.read(studioProvider))) return true;
+    if (!_creatingProject &&
+        !_projectOperationActive(ref.read(studioProvider))) {
+      return true;
+    }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('请等待当前项目操作完成后再切换或编辑项目入口。')));
@@ -47,9 +55,13 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   Widget build(BuildContext context) {
     final rm = context.rm;
     final cli = ref.watch(studioProvider);
-    final projectActionsEnabled = !_projectOperationActive(cli);
+    final projectActionsEnabled =
+        !_creatingProject && !_projectOperationActive(cli);
     final appInfo = ref.watch(appInfoProvider).valueOrNull ?? AppInfo.fallback;
-    if (widget.autoOpen && cli.hasProject && !_redirected) {
+    if (widget.autoOpen &&
+        cli.hasProject &&
+        !_redirected &&
+        !_creatingProject) {
       _redirected = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) context.go(RmRoutes.dashboard);
@@ -87,6 +99,7 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                             ? () => _pickProject(
                                 cli.projectDir,
                                 title: '新建 FH Radio Studio 项目目录',
+                                includeDemo: true,
                               )
                             : null,
                       ),
@@ -106,7 +119,7 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                       ),
                     ),
                   ],
-                ),
+                ).tourAnchor('project'),
                 const SizedBox(height: 36),
                 _recentHeader(context, cli.recentProjectDirs.length),
                 const SizedBox(height: 10),
@@ -131,12 +144,20 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                     const SizedBox(height: 6),
                   ],
                 const SizedBox(height: 24),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: FeatureTourButton(),
+                ).tourAnchor('help'),
+                const SizedBox(height: 12),
                 _footer(context),
               ],
             ),
           ),
         ),
       ),
+    ).withFeatureTour(
+      TourPage.welcome,
+      enabled: projectActionsEnabled && !_redirected,
     );
   }
 
@@ -166,13 +187,42 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
   Future<void> _pickProject(
     String currentProjectDir, {
     required String title,
+    bool includeDemo = false,
   }) async {
     final selected = await _chooseDirectory(
       title: title,
       initialDirectory: p.dirname(currentProjectDir),
     );
     if (!mounted || selected == null || !_canChangeProject()) return;
-    ref.read(studioProvider.notifier).setProjectDirAndStartFullScan(selected);
+    final fresh = !File(
+      FhRadioStudioProject.manifestPath(selected),
+    ).existsSync();
+    setState(() => _creatingProject = true);
+    final controller = ref.read(studioProvider.notifier);
+    try {
+      controller.setProjectDir(selected);
+      if (includeDemo && fresh) {
+        await DemoSong.install(selected, (path) async {
+          final before = ref.read(studioProvider).musicPaths.toSet();
+          await controller.importMusicPaths([path]);
+          return ref
+              .read(studioProvider)
+              .musicPaths
+              .where((path) => !before.contains(path))
+              .toList();
+        });
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('无法完成工程创建：$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _creatingProject = false);
+    }
+    if (!mounted || ref.read(studioProvider).projectDir != selected) return;
+    unawaited(controller.refreshStatus(verifyFiles: true));
     context.go(RmRoutes.dashboard);
   }
 

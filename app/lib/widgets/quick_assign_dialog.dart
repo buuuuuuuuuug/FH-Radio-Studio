@@ -84,10 +84,20 @@ class _QuickAssignDialogState extends ConsumerState<QuickAssignDialog> {
       setState(() => error = '${radio.code} 已满或歌曲状态已变化，请选择其他电台。');
       return;
     }
+    final radios =
+        editableAssignmentPlan(ref)
+            .assignmentsForPath(widget.track.source)
+            .map((a) => a.radioCode)
+            .toSet()
+            .toList()
+          ..sort();
+    final suffix = radios.length > 1
+        ? '现已分配到 ${radios.join(' / ')}，原分配保留；每个电台会分别收录。'
+        : '可在播放列表保存或撤销。';
     Navigator.pop(context, true);
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('已分配到 ${radio.code}；可在播放列表保存或撤销。')));
+    ).showSnackBar(SnackBar(content: Text('已分配到 ${radio.code}；$suffix')));
   }
 
   @override
@@ -226,6 +236,20 @@ class _QuickAssignDialogState extends ConsumerState<QuickAssignDialog> {
                           ),
                         ],
                         const SizedBox(height: 12),
+                        if (plan
+                            .assignmentsForPath(widget.track.source)
+                            .isNotEmpty) ...[
+                          Text(
+                            '当前电台：${(plan.assignmentsForPath(widget.track.source).map((a) => a.radioCode).toSet().toList()..sort()).join(' / ')}',
+                            style: RmText.sans(12, color: rm.warn),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '选择其他电台会保留原分配，每个电台分别收录，增加准备包体积。',
+                            style: RmText.sans(11.5, color: rm.fg3),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         for (final radio in radios) ...[
                           _radioChoice(context, radio, type, plan),
                           const SizedBox(height: 6),

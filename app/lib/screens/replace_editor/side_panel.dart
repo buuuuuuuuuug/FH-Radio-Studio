@@ -531,7 +531,6 @@ class EditorSidePanel extends ConsumerWidget {
         ],
       ),
       ('精修：恢复已保存', [keys[EditorAction.restoreSaved]!.label]),
-      ('分配至电台', [keys[EditorAction.assign]!.label]),
       (
         '精修 TD / PD',
         [
@@ -550,6 +549,7 @@ class EditorSidePanel extends ConsumerWidget {
       ('精修：按住自由放置', [keys[EditorAction.freePlace]!.label]),
       ('精修：磁吸 / 自由', [keys[EditorAction.toggleSnap]!.label]),
       ('上一首', [keys[EditorAction.previous]!.label]),
+      ('分配至电台', [keys[EditorAction.assign]!.label]),
       ('下一首', [keys[EditorAction.next]!.label]),
     ];
     return RmPanel(
@@ -557,7 +557,7 @@ class EditorSidePanel extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final i in items)
+          for (final i in items) ...[
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
@@ -575,6 +575,9 @@ class EditorSidePanel extends ConsumerWidget {
                 ],
               ),
             ),
+            if (i.$1 == '两端同移组合键' || i.$1 == '精修：磁吸 / 自由')
+              Divider(height: 20, color: rm.border),
+          ],
         ],
       ),
     );

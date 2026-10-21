@@ -13,7 +13,7 @@ class EditorOptions {
     this.manualOnly = false,
     this.sirenEnabled = false,
     this.expansionEnabled = false,
-    this.slmEnabled = false,
+    this.slmEnabled = true,
   });
   final bool syncPostLoop;
   final bool manualOnly;
@@ -40,7 +40,7 @@ class EditorOptionsController extends StateNotifier<EditorOptions> {
       manualOnly: settings['manual_only'] == true,
       sirenEnabled: settings['siren_enabled'] == true,
       expansionEnabled: settings['expansion_enabled'] == true,
-      slmEnabled: settings['seamless_loop_music'] == true,
+      slmEnabled: settings['seamless_loop_music'] != false,
     );
   }
 

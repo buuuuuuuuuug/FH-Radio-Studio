@@ -1,3 +1,5 @@
+import '../../core/demo_song.dart';
+import '../../widgets/feature_tour.dart';
 import 'waveform_overview.dart';
 import '../../core/playback_window.dart';
 import '../../widgets/quick_assign_dialog.dart';
@@ -70,10 +72,13 @@ String previewMpvTimestampForTesting(double seconds) {
 ({double start, double end}) pointPreviewWindowForTesting({
   required double timeSec,
   required double durationSec,
+  double previewDuration = pointPreviewDurationSec,
 }) {
   final duration = math.max(0, durationSec);
   final start = timeSec.clamp(0, duration).toDouble();
-  final end = math.min(start + pointPreviewDurationSec, duration).toDouble();
+  final end = math
+      .min(start + previewDuration.clamp(1, 30), duration)
+      .toDouble();
   return (start: start, end: end);
 }
 
@@ -715,6 +720,20 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
           );
         },
       ),
+    ).withFeatureTour(
+      TourPage.song,
+      enabled: !s.analyzing && !cli.busy && _manualSession == null,
+      onReveal: (target) {
+        final open = target == 'side';
+        if (_sideDrawerOpen != open) setState(() => _sideDrawerOpen = open);
+      },
+      onComplete: () {
+        setState(() => _sideDrawerOpen = false);
+        if (DemoSong.matches(cli.projectDir, s.track.source) &&
+            !ref.read(featureToursProvider).seen(TourPage.refine)) {
+          _openManualGroup(GroupKind.tl);
+        }
+      },
     );
   }
 
@@ -798,10 +817,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
               ],
             );
           },
-        ),
+        ).tourAnchor('save-start'),
         KeyedSubtree(
           key: const ValueKey('editor-header'),
-          child: _pageHead(context, s, n, showSidePanelButton: !reserveSidebar),
+          child: _pageHead(
+            context,
+            s,
+            n,
+            showSidePanelButton: !reserveSidebar,
+          ).tourAnchor('save'),
         ),
         if (s.analyzing || s.error != null || s.saved || s.dirty) ...[
           const SizedBox(height: 8),
@@ -816,7 +840,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
           onSelect: n.setActiveGroup,
           onManualRefine: _openManualGroup,
           onQuickConfirm: _quickConfirmGroup,
-        ),
+          onPreview: (kind) => unawaited(
+            _previewCandidate(s, n, kind, switch (kind) {
+              GroupKind.td => s.td,
+              GroupKind.tl => s.tl,
+              GroupKind.pd => s.pd,
+              GroupKind.pl => s.pl,
+            }),
+          ),
+        ).tourAnchor('groups'),
         const SizedBox(height: _EditorLayoutMetrics.verticalGap),
         _editorBody(
           context,
@@ -1073,6 +1105,15 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
               onNudge: _nudgeManualDraftTarget,
               onAudition: () => _previewManualAudition(n),
               onCancel: _cancelManualRefine,
+              onTourComplete: () {
+                if (DemoSong.matches(
+                  ref.read(studioProvider).projectDir,
+                  s.track.source,
+                )) {
+                  _cancelManualRefine();
+                  context.go(RmRoutes.pool);
+                }
+              },
               onUndo: _manualUndo.isEmpty ? null : _undoManualDraft,
               shortcutHint: _manualShortcutHint(),
               onConfirm: () => _confirmManualRefine(n),
@@ -1432,13 +1473,16 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       }
     } else {
       if (widget.enableAudio) {
-        unawaited(_playPointPreview(state, notifier, session.pointTime));
+        unawaited(
+          _playPointPreview(state, notifier, session.pointTime, session.kind),
+        );
       } else {
         final window = pointPreviewWindowForTesting(
           timeSec: session.pointTime,
+          previewDuration: _pointDuration(session.kind),
           durationSec: _previewDuration(
             state,
-            session.pointTime + pointPreviewDurationSec,
+            session.pointTime + _pointDuration(session.kind),
           ),
         );
         _setPlayhead(notifier, window.start);
@@ -1559,13 +1603,16 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       return;
     }
     if (widget.enableAudio) {
-      unawaited(_playPointPreview(state, notifier, updated.pointTime));
+      unawaited(
+        _playPointPreview(state, notifier, updated.pointTime, updated.kind),
+      );
     } else {
       final window = pointPreviewWindowForTesting(
         timeSec: updated.pointTime,
+        previewDuration: _pointDuration(updated.kind),
         durationSec: _previewDuration(
           state,
-          updated.pointTime + pointPreviewDurationSec,
+          updated.pointTime + _pointDuration(updated.kind),
         ),
       );
       _setPlayhead(notifier, window.start);
@@ -1663,7 +1710,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
                 state: s,
                 analysis: analysis,
                 onAnalyze: () => unawaited(n.analyze(force: true)),
-              ),
+              ).tourAnchor('side'),
             ),
           ],
         ),
@@ -1722,7 +1769,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         onZoomIn: n.zoomIn,
         onZoomOut: n.zoomOut,
         onWheelZoom: n.zoomByFactor,
-      ),
+      ).tourAnchor('waveform'),
       transport: _transportBar(s, n, floating: false),
       after: [
         if (ref.watch(editorOptionsProvider).manualOnly)
@@ -1748,7 +1795,14 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
             body: 'TL 与 PL 部分候选低于 50%，已用黄色标记。请逐个使用"试听拼接"功能确认循环点无缝，再点击确认。',
           ),
         const SizedBox(height: 14),
-        _group(s, n, GroupKind.td, s.ai.td, false, pending: s.aiPending),
+        _group(
+          s,
+          n,
+          GroupKind.td,
+          s.ai.td,
+          false,
+          pending: s.aiPending,
+        ).tourAnchor('details'),
         const SizedBox(height: 14),
         _group(s, n, GroupKind.tl, s.ai.tl, tlLow, pending: s.aiPending),
         const SizedBox(height: 14),
@@ -1776,7 +1830,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       onTogglePlay: () => unawaited(_togglePlayback(s, n)),
       onRewind: () => unawaited(_seekTo(s, n, 0)),
       onSkipFwd: () => unawaited(_seekTo(s, n, s.ai.durationSec)),
-      trailing: const AuditionSettingsButton(),
+      trailing: floating
+          ? const AuditionSettingsButton()
+          : const AuditionSettingsButton().tourAnchor('audition'),
     );
   }
 
@@ -1883,7 +1939,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       await _playLoopPreview(s, n, loop.start, loop.end);
     } else {
       final point = candidate as PointCandidate;
-      await _playPointPreview(s, n, point.t);
+      await _playPointPreview(s, n, point.t, kind);
     }
   }
 
@@ -2146,10 +2202,14 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     await _seekPlayerTo(player, next, exact: true);
   }
 
+  double _pointDuration(GroupKind kind) =>
+      ref.read(auditionPreferencesProvider).pointDuration(kind == GroupKind.pd);
+
   Future<void> _playPointPreview(
     ReplaceEditorState s,
     ReplaceEditorNotifier n,
     double timeSec,
+    GroupKind kind,
   ) async {
     if (!widget.enableAudio) return;
     final command = _beginPlaybackCommand();
@@ -2158,7 +2218,8 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     _seamAudition = null;
     final window = pointPreviewWindowForTesting(
       timeSec: timeSec,
-      durationSec: _previewDuration(s, timeSec + pointPreviewDurationSec),
+      durationSec: _previewDuration(s, timeSec + _pointDuration(kind)),
+      previewDuration: _pointDuration(kind),
     );
     final start = window.start;
     final end = window.end;
@@ -2528,11 +2589,16 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     if (_savePromptOpen || _matchesSavedTimingConfig(state)) return;
     _savePromptOpen = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) {
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
         _savePromptOpen = false;
         return;
       }
-      final save = await _showSaveConfigDialog(context, state);
+      final latest = ref.read(replaceEditorProvider(widget.trackId));
+      if (!latest.allConfirmed || _matchesSavedTimingConfig(latest)) {
+        _savePromptOpen = false;
+        return;
+      }
+      final save = await _showSaveConfigDialog(context, latest);
       _savePromptOpen = false;
       if (!mounted || (save != 'save' && save != 'assign')) return;
       final current = ref.read(replaceEditorProvider(widget.trackId));
@@ -2569,6 +2635,9 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
     BuildContext context,
     ReplaceEditorState state,
   ) {
+    final showAssignment = editableAssignmentPlan(
+      ref,
+    ).assignmentsForPath(state.track.source).isEmpty;
     return showDialog<String>(
       context: context,
       barrierColor: RmTokens.modalBackdrop,
@@ -2656,9 +2725,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
                         leading: const RmIcon('check', size: 12),
                         label: '保存配置',
                       ),
-                      if (editableAssignmentPlan(
-                        ref,
-                      ).assignmentsForPath(state.track.source).isEmpty)
+                      if (showAssignment)
                         RmButton(
                           label: '保存并分配电台',
                           variant: RmButtonVariant.primary,
@@ -3082,7 +3149,7 @@ class _FloatingSideDrawer extends StatelessWidget {
                 state: state,
                 analysis: analysis,
                 onAnalyze: onAnalyze,
-              ),
+              ).tourAnchor('side'),
             ),
           ),
         ),
@@ -3177,6 +3244,7 @@ class _ManualRefineOverlay extends StatefulWidget {
     required this.onNudge,
     required this.onAudition,
     required this.onCancel,
+    this.onTourComplete,
     required this.onUndo,
     required this.shortcutHint,
     required this.onConfirm,
@@ -3201,6 +3269,7 @@ class _ManualRefineOverlay extends StatefulWidget {
   final void Function(FineTarget target, double deltaSec) onNudge;
   final VoidCallback onAudition;
   final VoidCallback onCancel;
+  final VoidCallback? onTourComplete;
   final VoidCallback? onUndo;
   final String shortcutHint;
   final VoidCallback onConfirm;
@@ -3319,7 +3388,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ),
         ),
       ],
-    );
+    ).withFeatureTour(TourPage.refine, onComplete: widget.onTourComplete);
   }
 
   Widget _header(BuildContext context) {
@@ -3385,7 +3454,8 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ),
           const SizedBox(width: 10),
           _statusPill(context),
-          const SizedBox(width: 10),
+          const SizedBox(width: 6),
+          const SizedBox(width: 6),
           RmButton.icon(
             onPressed: onCancel,
             icon: const RmIcon('x', size: 13),
@@ -3548,7 +3618,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ),
         ],
       ),
-    );
+    ).tourAnchor('waveform');
   }
 
   Widget _transportTrailing(BuildContext context) {
@@ -3564,7 +3634,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           label: '取播放位置',
         ),
         _manualAuditionButton(context),
-        const AuditionSettingsButton(compact: true),
+        const AuditionSettingsButton(compact: true).tourAnchor('audition'),
         if (session.kind.isLoop) _endpointToggle(context),
       ],
     );
@@ -3668,7 +3738,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ],
         ),
       ),
-    );
+    ).tourAnchor('values');
   }
 
   Widget _fineRow(
@@ -3940,7 +4010,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ),
         ],
       ),
-    );
+    ).tourAnchor('suggestions');
   }
 
   Widget _aiCandidateRow(BuildContext context, int index, dynamic candidate) {
@@ -4165,7 +4235,7 @@ class _ManualRefineOverlayState extends State<_ManualRefineOverlay> {
           ),
         ),
       ],
-    );
+    ).tourAnchor('confirm');
   }
 
   Widget _statusPill(BuildContext context) {

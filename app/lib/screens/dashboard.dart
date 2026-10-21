@@ -1,3 +1,4 @@
+import '../widgets/feature_tour.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -128,7 +129,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   onPrimary: () => _handlePrimary(context, s, c, model),
                   onSecondary: () => _handleSecondary(context, s, c, model),
                   onTertiary: () => _handleTertiary(context, s, model),
-                ),
+                ).tourAnchor('workflow'),
                 const SizedBox(height: 16),
                 _StatusPillars(
                   model: model,
@@ -190,7 +191,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ),
         ),
       ),
-    );
+    ).withFeatureTour(TourPage.basics, enabled: !s.busy);
   }
 
   void _openAndScroll(_DetailTarget target) {
@@ -362,6 +363,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       referenceMedianLufs: preview.referenceMedianLufs,
       initialOffsetLu: preview.initialOffsetLu,
       previewInputLufs: preview.previewInputLufs,
+      previewTracks: c.buildPackageLoudnessPreviews(),
+      assignmentPlan: buildPlan,
       previewSource: preview.source,
       previewTitle: preview.previewTitle,
       previewArtist: preview.previewArtist,
@@ -2505,7 +2508,7 @@ class _SettingsStrip extends StatelessWidget {
             controller: controller,
             gameDirController: gameDirController,
             onPickDirectory: onPickDirectory,
-          ),
+          ).tourAnchor('game'),
           Material(
             color: Colors.transparent,
             child: Column(
@@ -2519,7 +2522,7 @@ class _SettingsStrip extends StatelessWidget {
                 const SeamlessLoopOptions(),
               ],
             ),
-          ),
+          ).tourAnchor('analysis'),
         ],
       ),
     );

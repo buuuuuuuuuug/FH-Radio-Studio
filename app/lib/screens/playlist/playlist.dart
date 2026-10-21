@@ -1,3 +1,5 @@
+import '../../widgets/cross_radio_assignment_notice.dart';
+import '../../widgets/feature_tour.dart';
 import 'playlist_draggable.dart';
 import 'playlist_drag_preview.dart';
 import '../../widgets/open_package_folder_button.dart';
@@ -121,7 +123,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       ref.read(playlistPlanProvider.notifier).save();
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('歌曲分配与顺序已保存，无需构建准备包。')));
+      ).showSnackBar(const SnackBar(content: Text('歌曲分配与顺序已保存。')));
     } on Object catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -290,6 +292,13 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
             total: current + added,
             added: added,
             limit: expansion ? 4096 : (original > 0 ? original : radio.slot),
+            crossRadioCount: tracks
+                .where(
+                  (track) => base
+                      .assignmentsForPath(track.source)
+                      .any((a) => a.radioCode != radio.code),
+                )
+                .length,
             replacesBuiltin:
                 current == 0 &&
                 catalog.modeOfList(radio.code, type) != StationMode.custom,
@@ -929,6 +938,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       referenceMedianLufs: preview.referenceMedianLufs,
       initialOffsetLu: preview.initialOffsetLu,
       previewInputLufs: preview.previewInputLufs,
+      previewTracks: cli.buildPackageLoudnessPreviews(),
+      assignmentPlan: buildPlan,
       previewSource: preview.source,
       previewTitle: preview.previewTitle,
       previewArtist: preview.previewArtist,
@@ -1067,7 +1078,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _pageHead(context, cli, view),
+                  _pageHead(context, cli, view).tourAnchor('build'),
                   if (cli.projectEditingLocked) ...[
                     const SizedBox(height: 12),
                     RmBanner(
@@ -1085,6 +1096,28 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                       ),
                     )
                   else ...[
+                    if ((view == PlaylistCatalogView.package
+                            ? editingPlan
+                            : poolPlan)
+                        .crossRadioAssignments
+                        .isNotEmpty) ...[
+                      CrossRadioAssignmentNotice(
+                        plan: view == PlaylistCatalogView.package
+                            ? editingPlan
+                            : poolPlan,
+                        titleForSource: (source) =>
+                            s.pool
+                                .where(
+                                  (t) =>
+                                      PlaylistAssignment.keyForPath(t.source) ==
+                                      PlaylistAssignment.keyForPath(source),
+                                )
+                                .firstOrNull
+                                ?.title ??
+                            source,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     _toolbar(context, s, catalog, view, editingPlan, cli),
                     const SizedBox(height: 18),
                     Expanded(
@@ -1098,7 +1131,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                         editingPlan,
                         view,
                         cli,
-                      ),
+                      ).tourAnchor('board'),
                     ),
                   ],
                 ],
@@ -1107,7 +1140,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
           ),
         ),
       ),
-    );
+    ).withFeatureTour(TourPage.playlist, enabled: !cli.busy && !catalog.failed);
   }
 
   Widget _pageHead(
@@ -1301,7 +1334,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 ),
               ),
             ),
-          );
+          ).tourAnchor('search');
           final Widget? copyAction = view == PlaylistCatalogView.package
               ? RmButton(
                   onPressed: editingLocked
@@ -1362,7 +1395,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   if (view == PlaylistCatalogView.package)
                     Text('双击自建曲目进入编辑', style: RmText.sans(11.5, color: rm.fg3)),
                 ],
-              ),
+              ).tourAnchor('view'),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 10,
@@ -1375,7 +1408,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   constraints.maxWidth + 30,
                   withPool: view == PlaylistCatalogView.package,
                 ),
-              ),
+              ).tourAnchor('layout'),
             ],
           );
         },

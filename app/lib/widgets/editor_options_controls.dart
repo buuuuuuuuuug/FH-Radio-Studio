@@ -1,3 +1,4 @@
+import 'feature_tour.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../state/router.dart';
@@ -77,7 +78,7 @@ class EditorOptionsControls extends ConsumerWidget {
               '同步起止时间与确认状态',
               options.syncPostLoop,
               (v) => controller.update(syncPostLoop: v),
-            );
+            ).tourAnchor('sync');
             final manual =
                 (analysisControl == null
                     ? null
@@ -156,7 +157,7 @@ class EditorOptionsControls extends ConsumerWidget {
                   );
                 }
               },
-            );
+            ).tourAnchor('expansion');
             if (constraints.maxWidth < 900) {
               return Column(
                 children: [
