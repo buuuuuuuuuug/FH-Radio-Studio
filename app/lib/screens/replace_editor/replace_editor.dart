@@ -36,6 +36,8 @@ import '../../theme/app_theme.dart';
 import '../../theme/text_styles.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/rm_banner.dart';
+import '../../widgets/song_metadata_button.dart';
+import '../../widgets/bpm_edit_button.dart';
 import '../../widgets/rm_button.dart';
 import '../../widgets/rm_icon.dart';
 import '../../widgets/rm_chip.dart';
@@ -464,7 +466,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       if (TimeInputValidation.invalid.isNotEmpty) return;
       final n = ref.read(replaceEditorProvider(widget.trackId).notifier);
       final state = ref.read(replaceEditorProvider(widget.trackId));
-      if (state.allConfirmed) {
+      if (state.allConfirmed || (state.dirty && state.bpmManual)) {
         _saveConfig(context, n, title: state.track.title);
       } else {
         ScaffoldMessenger.of(
@@ -827,6 +829,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
             showSidePanelButton: !reserveSidebar,
           ).tourAnchor('save'),
         ),
+        const SizedBox(height: 8),
         if (s.analyzing || s.error != null || s.saved || s.dirty) ...[
           const SizedBox(height: 8),
           KeyedSubtree(
@@ -923,6 +926,26 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
       spacing: 8,
       runSpacing: 8,
       children: [
+        BpmEditButton(
+          bpm: s.ai.bpm,
+          manual: s.bpmManual,
+          enabled:
+              !s.analyzing &&
+              !ref.watch(studioProvider).busy &&
+              !ref.watch(studioProvider).customSongEditingLocked,
+          onApply: n.setBpm,
+        ),
+        SongMetadataButton(
+          title: t.title,
+          artist: t.artist,
+          enabled:
+              t.id.startsWith('real:') &&
+              !ref.watch(studioProvider).busy &&
+              !ref.watch(studioProvider).customSongEditingLocked,
+          onSave: (title, artist) => ref
+              .read(studioProvider.notifier)
+              .editTrackMetadata(t.source, title, artist),
+        ),
         RmChip(
           key: const ValueKey('editor-assignment-status'),
           label: t.assignedTo == null
@@ -945,7 +968,7 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         ),
         RmButton(
           key: const ValueKey('editor-save'),
-          onPressed: s.allConfirmed
+          onPressed: s.allConfirmed || (s.dirty && s.bpmManual)
               ? () => _saveConfig(context, n, title: s.track.title)
               : null,
           variant: RmButtonVariant.primary,
@@ -2619,6 +2642,10 @@ class _ReplaceEditorScreenState extends ConsumerState<ReplaceEditorScreen> {
         .read(trackTimingProvider.notifier)
         .configForPath(state.track.source);
     if (saved == null || !saved.allConfirmed) return false;
+    if ((saved.bpm - state.ai.bpm).abs() > .001 ||
+        saved.bpmManual != state.bpmManual) {
+      return false;
+    }
     for (final key in trackMarkerKeys) {
       final current = state.markerSeconds[key];
       final stored = saved.markersSec[key];

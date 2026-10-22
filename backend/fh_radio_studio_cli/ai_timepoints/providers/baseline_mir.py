@@ -302,13 +302,17 @@ def _estimate_bpm(features: Dict[str, np.ndarray], fallback_bpm: float) -> Tuple
         return float(fallback_bpm), 0.1
     env = novelty - float(np.mean(novelty))
     frame_rate = 1.0 / max(1e-6, float(np.median(np.diff(times))))
+    # Score each representable period once. Scanning nominal BPM values used
+    # to repeat lags, bias ties toward the highest label and report a tempo
+    # inconsistent with the period actually measured.
+    if not np.all(np.isfinite(env)) or float(np.dot(env, env)) < 1e-10:
+        return float(fallback_bpm), 0.1
+    first = max(2, int(np.ceil(frame_rate * 60.0 / 180.0)))
+    last = min(env.size - 3, int(np.floor(frame_rate * 60.0 / 70.0)))
     scores: List[Tuple[float, float]] = []
-    for bpm in np.linspace(70.0, 180.0, 221):
-        lag = int(round(frame_rate * 60.0 / bpm))
-        if lag < 2 or lag >= env.size - 2:
-            continue
+    for lag in range(first, last + 1):
         score = float(np.dot(env[:-lag], env[lag:]) / max(1, env.size - lag))
-        scores.append((score, float(bpm)))
+        scores.append((score, frame_rate * 60.0 / lag))
     if not scores:
         return float(fallback_bpm), 0.1
     scores.sort(reverse=True)

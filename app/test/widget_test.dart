@@ -1147,6 +1147,10 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(find.text('分开编辑漫游和比赛？'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('split-playlist-enable-warning')),
+        findsOneWidget,
+      );
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(find.text('分开编辑漫游和比赛？'), findsNothing);
@@ -1859,6 +1863,7 @@ void main() {
       controller.state.copyWith(
         busy: true,
         busyLabel: '构建电台包',
+        packageBuildCancellable: true,
         packageBuildProgressSteps: const [
           PackageBuildProgressStep(
             id: 'inspect_inputs',
@@ -1964,6 +1969,13 @@ void main() {
     await tester.pump();
 
     expect(taps, 0);
+    await tester.tap(find.byKey(const ValueKey('package-build-cancel')));
+    await tester.pump();
+    expect(controller.cancelPackageBuildCount, 1);
+    expect(
+      find.byKey(const ValueKey('package-build-blocking-overlay')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
     semantics.dispose();
   });
@@ -2197,6 +2209,17 @@ class _StaticStudioController extends StudioController {
   }
 
   int refreshCount = 0;
+  int cancelPackageBuildCount = 0;
+  @override
+  Future<void> cancelPackageBuild() async {
+    cancelPackageBuildCount++;
+    state = state.copyWith(
+      busy: false,
+      busyLabel: null,
+      packageBuildCancelled: true,
+    );
+  }
+
   int aiEnvironmentSyncCount = 0;
   int checkToolchainProfileCount = 0;
   AiEnvironmentSyncOptions? lastAiEnvironmentSyncOptions;

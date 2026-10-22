@@ -79,18 +79,15 @@ void main() {
     },
   );
   test(
-    'audition defaults to one repetition and two seconds on each side',
+    'audition defaults to two seconds on each side and preserves duration edits',
     () async {
       final f = await fixture.fixture();
       final prefs = f.container.read(auditionPreferencesProvider);
-      expect(prefs.repetitions, 1);
       expect(prefs.before, 2);
       expect(prefs.after, 2);
-      f.container
-          .read(auditionPreferencesProvider.notifier)
-          .update(repetitions: 4);
+      f.container.read(auditionPreferencesProvider.notifier).update(before: 4);
       f.container.invalidate(auditionPreferencesProvider);
-      expect(f.container.read(auditionPreferencesProvider).repetitions, 4);
+      expect(f.container.read(auditionPreferencesProvider).before, 4);
     },
   );
   testWidgets(

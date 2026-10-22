@@ -23,6 +23,15 @@ Map<String, dynamic>? readPackageManifest(String? packageDir) {
 Map<String, dynamic>? readPackageManifestFile(String? manifestPath) {
   if (manifestPath == null || manifestPath.trim().isEmpty) return null;
   final manifest = File(manifestPath);
+  final packageDir = manifest.parent.parent;
+  if (File(
+    p.join(
+      packageDir.parent.path,
+      '.${p.basename(packageDir.path)}-publishing.json',
+    ),
+  ).existsSync()) {
+    return null;
+  }
   if (!manifest.existsSync()) return null;
   try {
     final decoded = jsonDecode(manifest.readAsStringSync(encoding: utf8));

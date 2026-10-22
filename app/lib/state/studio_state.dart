@@ -1286,6 +1286,9 @@ class StudioState {
     this.aiEnvironmentProgressSteps = const [],
     this.aiEnvironmentProgressLog = const [],
     required this.packageBuildProgressSteps,
+    this.packageBuildCancellable = false,
+    this.packageBuildCancelling = false,
+    this.packageBuildCancelled = false,
     required this.gameRunning,
     required this.preferredLang,
     required this.languageReady,
@@ -1496,6 +1499,9 @@ class StudioState {
   final List<AiEnvironmentProgressStep> aiEnvironmentProgressSteps;
   final List<String> aiEnvironmentProgressLog;
   final List<PackageBuildProgressStep> packageBuildProgressSteps;
+  final bool packageBuildCancellable;
+  final bool packageBuildCancelling;
+  final bool packageBuildCancelled;
   final bool gameRunning;
   final String preferredLang;
   final bool languageReady;
@@ -1775,6 +1781,9 @@ class StudioState {
     List<AiEnvironmentProgressStep>? aiEnvironmentProgressSteps,
     List<String>? aiEnvironmentProgressLog,
     List<PackageBuildProgressStep>? packageBuildProgressSteps,
+    bool? packageBuildCancellable,
+    bool? packageBuildCancelling,
+    bool? packageBuildCancelled,
     bool? gameRunning,
     String? preferredLang,
     bool? languageReady,
@@ -1858,6 +1867,12 @@ class StudioState {
           aiEnvironmentProgressLog ?? this.aiEnvironmentProgressLog,
       packageBuildProgressSteps:
           packageBuildProgressSteps ?? this.packageBuildProgressSteps,
+      packageBuildCancellable:
+          packageBuildCancellable ?? this.packageBuildCancellable,
+      packageBuildCancelling:
+          packageBuildCancelling ?? this.packageBuildCancelling,
+      packageBuildCancelled:
+          packageBuildCancelled ?? this.packageBuildCancelled,
       gameRunning: gameRunning ?? this.gameRunning,
       preferredLang: preferredLang ?? this.preferredLang,
       languageReady: languageReady ?? this.languageReady,
@@ -2698,6 +2713,7 @@ class StudioController extends StateNotifier<StudioState> {
   final SharedPreferences _prefs;
   bool _startupFullCheckStarted = false;
   CliCancellationToken? _activeAiEnvironmentSyncToken;
+  CliCancellationToken? _activePackageBuildToken;
   String? _projectPathMigrationDir;
   Future<bool>? _projectPathMigrationFuture;
 
@@ -2719,6 +2735,10 @@ class StudioController extends StateNotifier<StudioState> {
         ? FhRadioStudioProject.defaultProjectDir()
         : File(value.trim()).absolute.path;
     _startupFullCheckStarted = false;
+    if (!File(FhRadioStudioProject.manifestPath(next)).existsSync()) {
+      final error = FhRadioStudioProject.newProjectPathError(next);
+      if (error != null) throw FormatException(error);
+    }
     FhRadioStudioProject.ensure(next);
     _deleteStalePendingPackage(next);
     _cleanupInterruptedProjectImports(next);
@@ -3034,6 +3054,33 @@ class StudioController extends StateNotifier<StudioState> {
 
   void addMusicPaths(List<String> values) {
     setMusicPaths([...state.musicPaths, ...values]);
+  }
+
+  Future<bool> editTrackMetadata(
+    String source,
+    String title,
+    String artist,
+  ) async {
+    if (state.busy || state.customSongEditingLocked) return false;
+    var saved = false;
+    await _withBusy('修改歌曲信息', () async {
+      final result = await _run([
+        'set-track-metadata',
+        source,
+        '--project-dir',
+        state.projectDir,
+        '--title',
+        title,
+        '--artist',
+        artist,
+      ], streamOutput: false);
+      saved = result.ok;
+      if (saved) {
+        setMusicPaths(state.musicPaths);
+        _append('歌曲信息已保存到工程；重新构建并写入准备包后在游戏中生效。');
+      }
+    });
+    return saved;
   }
 
   Future<void> importMusicPaths(List<String> values) async {
@@ -3868,6 +3915,9 @@ class StudioController extends StateNotifier<StudioState> {
     if (token != null && !token.isCancelled) {
       unawaited(token.cancel());
     }
+    final build = _activePackageBuildToken;
+    _activePackageBuildToken = null;
+    if (build != null && !build.isCancelled) unawaited(build.cancel());
     super.dispose();
   }
 
@@ -4152,6 +4202,113 @@ class StudioController extends StateNotifier<StudioState> {
     return jsonDecode(result.stdout) as Map<String, dynamic>;
   }
 
+  Future<void> cancelPackageBuild() async {
+    final token = _activePackageBuildToken;
+    if (token == null || token.isCancelled) return;
+    state = state.copyWith(
+      packageBuildCancelling: true,
+      packageBuildCancellable: false,
+    );
+    _append('正在停止构建并结束编码进程…');
+    await token.cancel();
+  }
+
+  Future<CliRunResult> _runPackageBuild(
+    List<String> args, {
+    String? stdinInput,
+  }) async {
+    final target = args[args.indexOf('--out-dir') + 1];
+    final token = _activePackageBuildToken = CliCancellationToken();
+    state = state.copyWith(
+      packageBuildCancellable: true,
+      packageBuildCancelling: false,
+      packageBuildCancelled: false,
+    );
+    Map<String, dynamic>? event(String output, String prefix) {
+      for (final line in const LineSplitter().convert(output).reversed) {
+        if (!line.startsWith(prefix)) continue;
+        try {
+          final value = jsonDecode(line.substring(prefix.length));
+          if (value is Map && value['target'] == target) {
+            return value.cast<String, dynamic>();
+          }
+        } on FormatException {
+          // A cancelled process may leave a final partial output line.
+          continue;
+        }
+      }
+      return null;
+    }
+
+    try {
+      final result = await _run(
+        [...args, '--defer-publish'],
+        stdinInput: stdinInput,
+        cancellationToken: token,
+      );
+      if (token.isCancelled || result.cancelled) {
+        state = state.copyWith(
+          packageBuildCancelled: true,
+          packageBuildCancellable: false,
+        );
+        final stage = event(
+          result.stdout,
+          'FH_RADIO_STUDIO_PACKAGE_STAGE ',
+        )?['stage'];
+        if (stage is String) {
+          // The CLI validates ownership and preserves any completed package.
+          await _run([
+            'discard-package-build',
+            '--out-dir',
+            target,
+            '--build-dir',
+            stage,
+          ], streamOutput: false);
+        }
+        _append('构建已停止，上次完成的准备包与播放列表已保留。');
+        return CliRunResult(
+          exitCode: -1,
+          stdout: result.stdout,
+          stderr: '',
+          commandLine: result.commandLine,
+          cancelled: true,
+        );
+      }
+      if (!result.ok) return result;
+      final ready = event(
+        result.stdout,
+        'FH_RADIO_STUDIO_PACKAGE_READY ',
+      )?['ready'];
+      if (ready is! String) {
+        return CliRunResult(
+          exitCode: 1,
+          stdout: result.stdout,
+          stderr: '构建没有返回完整准备包，未替换旧包。',
+          commandLine: result.commandLine,
+        );
+      }
+      // Publication is a separate short transaction: never kill it halfway.
+      _activePackageBuildToken = null;
+      state = state.copyWith(packageBuildCancellable: false);
+      _append('编码已完成，正在替换并校验准备包…');
+      return await _run([
+        'publish-package',
+        '--out-dir',
+        target,
+        '--ready-dir',
+        ready,
+      ]);
+    } finally {
+      _activePackageBuildToken = null;
+      if (mounted) {
+        state = state.copyWith(
+          packageBuildCancellable: false,
+          packageBuildCancelling: false,
+        );
+      }
+    }
+  }
+
   Future<bool> buildPackage({
     double loudnessOffsetLu = kDefaultPackageLoudnessOffsetLu,
     int quality = 50,
@@ -4336,7 +4493,7 @@ class StudioController extends StateNotifier<StudioState> {
       }
       final usePlanStdin =
           draft.hasPlan && (musicInputs.isNotEmpty || restoresBuiltin);
-      final result = await _run([
+      final result = await _runPackageBuild([
         'build-package',
         '--quality',
         '$quality',
@@ -4400,12 +4557,49 @@ class StudioController extends StateNotifier<StudioState> {
         if (_canCreatePendingPackage) {
           _append('准备包已生成；但当前游戏文件还没确认，写入前仍需要先处理新文件记录。');
         }
-      } else {
-        _append('本次构建失败，已保留上次成功的准备包。');
+      } else if (!result.cancelled) {
+        _append(
+          '本次构建或替换未完成，上次成功的准备包已保留。已完成的新包也会保留；若播放列表出现“重试替换”，可释放目录占用后直接重试，无需重新编码。',
+        );
         await _refreshIntegrityFromCli();
       }
     });
     return built;
+  }
+
+  Future<bool> retryPackagePublication(String target, String ready) async {
+    if (state.busy || state.projectEditingLocked) return false;
+    final current = FhRadioStudioProject.currentPackageDir(state.projectDir);
+    final pending = FhRadioStudioProject.pendingPackageDir(state.projectDir);
+    if (target != current && target != pending) return false;
+    var published = false;
+    await _withBusy('重试替换准备包', () async {
+      final result = await _run([
+        'publish-package',
+        '--out-dir',
+        target,
+        '--ready-dir',
+        ready,
+      ]);
+      published = result.ok;
+      if (published) {
+        state = state.copyWith(
+          lastPackageDir: target == current ? current : state.lastPackageDir,
+          lastPackageSummary: target == current
+              ? _readPackageSummary(current)
+              : state.lastPackageSummary,
+          pendingPackageDir: target == pending
+              ? pending
+              : state.pendingPackageDir,
+          pendingPackageSummary: target == pending
+              ? _readPackageSummary(pending)
+              : state.pendingPackageSummary,
+        );
+        await _refreshIntegrityFromCli();
+        _append('准备包替换完成，本次未重新编码。');
+      }
+    });
+    return published;
   }
 
   Future<bool> createPendingBaselineAndBuildPackage() async {
@@ -4459,7 +4653,7 @@ class StudioController extends StateNotifier<StudioState> {
       final quality =
           _objectInt(readPackageManifest(state.lastPackageDir)?['quality']) ??
           50;
-      final result = await _run([
+      final result = await _runPackageBuild([
         'build-package',
         '--quality',
         '$quality',
@@ -4506,6 +4700,8 @@ class StudioController extends StateNotifier<StudioState> {
           pendingPackageSummary: _readPackageSummary(packageDir),
         );
         await _refreshIntegrityFromCli();
+      } else if (result.cancelled) {
+        handled = false;
       } else {
         handled = false;
         final packageDir = File(outDir).absolute.path;
@@ -5353,6 +5549,9 @@ class StudioController extends StateNotifier<StudioState> {
     state = state.copyWith(
       busy: true,
       busyLabel: label,
+      packageBuildCancelled: _isPackageBuildBusyLabel(label)
+          ? false
+          : state.packageBuildCancelled,
       packageBuildProgressSteps: _isPackageBuildBusyLabel(label)
           ? _packageBuildStartupProgressSteps()
           : state.packageBuildProgressSteps,

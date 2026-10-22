@@ -68,24 +68,20 @@ const _steps = <TourPage, List<TourStep>>{
     TourStep(
       'audition',
       '试听设置',
-      '分别设置 TD、PD 的试听时长，以及 TL／PL 拼接前后时长、重复次数和音量；从下一次试听生效，不改变时间点。',
+      '分别设置 TD、PD 的试听时长，以及 TL／PL 拼接前后时长和音量；从下一次试听生效，不改变时间点。',
     ),
     TourStep('side', '分析与快捷键', '这里查看 BPM、循环衔接匹配度和快捷键。匹配度仅供参考，选点后仍应试听确认。'),
     TourStep(
       'save',
       '浏览与保存',
-      '上方返回列表或切换歌曲；右侧分配电台。完成选点后保存，Ctrl＋S 也可保存。',
+      '上方返回列表或切换歌曲；可编辑歌曲信息、手动校准 BPM 或分配电台。修改后保存，Ctrl＋S 也可保存。',
       endTarget: 'save-start',
     ),
   ],
   TourPage.refine: [
     TourStep('waveform', '放置端点', '点击或拖动波形调整端点；循环可分别选择 A、B。'),
     TourStep('values', '精确微调', '输入时间或使用微调按钮；也可自由放置端点，或提取当前播放位置。'),
-    TourStep(
-      'audition',
-      '试听设置',
-      '调整播放起点试听时长、循环拼接前后时长、重复次数和音量。使用旁边的试听按钮检查当前选点。',
-    ),
+    TourStep('audition', '试听设置', '调整播放起点试听时长、循环拼接前后时长和音量。使用旁边的试听按钮检查当前选点。'),
     TourStep(
       'suggestions',
       '套用建议',

@@ -28,10 +28,12 @@ class TrackTimingConfig {
     required this.confirmed,
     required this.updatedAt,
     this.trackKey,
+    this.bpmManual = false,
   });
 
   final String source;
   final double bpm;
+  final bool bpmManual;
   final Map<String, double> markersSec;
   final Map<String, bool> confirmed;
   final DateTime updatedAt;
@@ -45,6 +47,7 @@ class TrackTimingConfig {
     return TrackTimingConfig(
       source: source ?? this.source,
       bpm: bpm,
+      bpmManual: bpmManual,
       markersSec: markersSec,
       confirmed: confirmed,
       updatedAt: updatedAt,
@@ -76,6 +79,7 @@ class TrackTimingConfig {
     return {
       if (trackKey != null) 'track_key': trackKey,
       'bpm': bpm,
+      if (bpmManual) 'bpm_manual': true,
       'markers_sec': markersSec,
       'confirmed': confirmed,
       'updated_at': updatedAt.toUtc().toIso8601String(),
@@ -88,6 +92,7 @@ class TrackTimingConfig {
       source: _asString(json['source']),
       trackKey: rawTrackKey.isEmpty ? null : rawTrackKey,
       bpm: _asDouble(json['bpm']),
+      bpmManual: json['bpm_manual'] == true,
       markersSec: _doubleMap(json['markers_sec']),
       confirmed: _boolMap(json['confirmed']),
       updatedAt:

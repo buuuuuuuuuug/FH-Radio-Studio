@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:fh_radio_studio/core/fh_radio_studio_cli.dart';
+import 'package:fh_radio_studio/core/package_manifest.dart';
 import 'package:fh_radio_studio/core/playlist_plan.dart';
 import 'package:fh_radio_studio/core/project_refs.dart';
 import 'package:fh_radio_studio/core/project_workspace.dart';
@@ -1554,6 +1555,67 @@ Created AI model manifest scaffold: C:\\FH Radio Studio\\models\\ai_tools_manife
       },
     );
 
+    test(
+      'stopping a build returns without publishing or changing the old package',
+      () async {
+        final projectDir = p.join(tempRoot.path, 'project');
+        _writeIntegrityFixture(projectDir, deployedBytes: 'original');
+        final source = File(
+          p.join(
+            FhRadioStudioProject.sourcesDir(projectDir),
+            'cancel-song.wav',
+          ),
+        )..createSync(recursive: true);
+        _writeLegacyPlaylistPlan(
+          projectDir,
+          PlaylistPlan.empty().assign(
+            source: source.path,
+            radioCode: 'R4',
+            playlistType: 'FreeRoam',
+            slot: 1,
+          ),
+        );
+        _upsertTrackMetadata(
+          projectDir,
+          source.path,
+          artist: 'Artist',
+          title: 'Title',
+        );
+        SharedPreferences.setMockInitialValues({_projectDirKey: projectDir});
+        final prefs = await SharedPreferences.getInstance();
+        final runtime = _testUvRuntime(tempRoot, 'cancel-build');
+        final cli = _RecordingCli(runtime)..holdBuildUntilCancelled = true;
+        final controller = _RecordingCliStudioController(prefs, cli);
+        addTearDown(controller.dispose);
+        controller.setStateForTest(
+          controller.state.copyWith(repoRoot: runtime.projectRoot),
+        );
+        final old = File(
+          packageManifestPath(
+            FhRadioStudioProject.currentPackageDir(projectDir),
+          ),
+        );
+        final bytes = old.readAsBytesSync();
+        final build = controller.buildPackage(
+          plan: PlaylistPlanStore.read(projectDir),
+        );
+        for (var i = 0; i < 50 && cli.buildToken == null; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(controller.state.packageBuildCancellable, isTrue);
+        await controller.cancelPackageBuild();
+        expect(await build.timeout(const Duration(seconds: 3)), isFalse);
+        expect(cli.buildToken!.isCancelled, isTrue);
+        expect(
+          cli.commands.any((args) => args.first == 'publish-package'),
+          isFalse,
+        );
+        expect(controller.state.packageBuildCancelled, isTrue);
+        expect(controller.state.busy, isFalse);
+        expect(old.readAsBytesSync(), bytes);
+      },
+    );
+
     test('passes selected loudness offset to package build command', () async {
       final projectDir = p.join(tempRoot.path, 'project');
       _writeIntegrityFixture(projectDir, deployedBytes: 'original');
@@ -2013,6 +2075,8 @@ class _RecordingCli extends FhRadioStudioCli {
   /// from stdout instead of a file).
   final String? reconstructPlanJson;
   int syncCount = 0;
+  bool holdBuildUntilCancelled = false;
+  CliCancellationToken? buildToken;
 
   /// stdin payload the controller piped into the first invocation of [command].
   String? stdinForCommand(String command) {
@@ -2052,6 +2116,21 @@ class _RecordingCli extends FhRadioStudioCli {
     CliCancellationToken? cancellationToken,
     String? stdinInput,
   }) async {
+    if (args.firstOrNull == 'build-package' && holdBuildUntilCancelled) {
+      commands.add([...args]);
+      stdins.add(stdinInput);
+      buildToken = cancellationToken;
+      while (!(cancellationToken?.isCancelled ?? false)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      return const CliRunResult(
+        exitCode: -1,
+        stdout: '',
+        stderr: '',
+        commandLine: 'test cancelled build',
+        cancelled: true,
+      );
+    }
     return _resultFor(args, stdinInput);
   }
 
@@ -2083,6 +2162,8 @@ class _RecordingCli extends FhRadioStudioCli {
             ? '{}'
             : '$_planMarkerPrefix${jsonEncode(jsonDecode(reconstructPlanJson!))}',
       'migrate-project' => 'Project migrated',
+      'build-package' when args.contains('--defer-publish') =>
+        'FH_RADIO_STUDIO_PACKAGE_READY ${jsonEncode({'target': args[args.indexOf('--out-dir') + 1], 'ready': p.join(p.dirname(args[args.indexOf('--out-dir') + 1]), '.${p.basename(args[args.indexOf('--out-dir') + 1])}-building-test')})}',
       _ => '{}',
     };
     return CliRunResult(

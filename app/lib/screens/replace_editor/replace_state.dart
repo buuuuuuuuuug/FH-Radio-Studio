@@ -50,6 +50,7 @@ class ReplaceEditorState {
     required this.dirty,
     required this.saved,
     this.error,
+    this.bpmManual = false,
   });
 
   factory ReplaceEditorState.initial({
@@ -80,6 +81,7 @@ class ReplaceEditorState {
       analyzing: track.id.startsWith('real:') && config == null,
       dirty: false,
       saved: config != null,
+      bpmManual: config?.bpmManual ?? false,
     );
   }
 
@@ -107,6 +109,7 @@ class ReplaceEditorState {
   final bool analyzing;
   final bool dirty;
   final bool saved;
+  final bool bpmManual;
   final String? error;
 
   PointCandidate get td => selectedManualOf(GroupKind.td)
@@ -214,6 +217,7 @@ class ReplaceEditorState {
     bool? analyzing,
     bool? dirty,
     bool? saved,
+    bool? bpmManual,
     Object? error = _sentinel,
   }) {
     final nextAi = ai ?? this.ai;
@@ -270,6 +274,7 @@ class ReplaceEditorState {
       analyzing: analyzing ?? this.analyzing,
       dirty: dirty ?? this.dirty,
       saved: saved ?? this.saved,
+      bpmManual: bpmManual ?? this.bpmManual,
       error: identical(error, _sentinel) ? this.error : error as String?,
     );
   }
@@ -364,6 +369,25 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     _savedState = _savedState.copyWith(track: track);
   }
 
+  void setBpm(double bpm) {
+    if (!bpm.isFinite || bpm < 20 || bpm > 400) {
+      throw const FormatException('BPM 必须在 20–400 之间');
+    }
+    if (state.bpmManual && state.ai.bpm == bpm) return;
+    _remember();
+    state = state.copyWith(
+      ai: _withManualBpm(state.ai, bpm),
+      bpmManual: true,
+      tlManual: state.tlManual?.copyWith(
+        bars: _barsFor(state.tlManual!.start, state.tlManual!.end, bpm),
+      ),
+      plManual: state.plManual?.copyWith(
+        bars: _barsFor(state.plManual!.start, state.plManual!.end, bpm),
+      ),
+      dirty: true,
+    );
+  }
+
   void editTime(GroupKind kind, FineTarget target, double seconds) {
     if (!seconds.isFinite || seconds < 0 || seconds > state.ai.durationSec) {
       throw const FormatException('时间必须位于歌曲范围内');
@@ -396,7 +420,12 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
         ai: state.ai.copyWith(
           durationSec: waveform.durationSec,
           waveformPeaks: _waveformDisplayValues(waveform.waveform),
-          beats: waveform.beats.isNotEmpty
+          beats: state.bpmManual
+              ? _withManualBpm(
+                  state.ai.copyWith(durationSec: waveform.durationSec),
+                  state.ai.bpm,
+                ).beats
+              : waveform.beats.isNotEmpty
               ? waveform.beats
               : state.ai.beats.isNotEmpty
               ? state.ai.beats
@@ -422,7 +451,12 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
         ai: _savedState.ai.copyWith(
           durationSec: waveform.durationSec,
           waveformPeaks: state.ai.waveformPeaks,
-          beats: state.ai.beats,
+          beats: _savedState.bpmManual
+              ? _withManualBpm(
+                  _savedState.ai.copyWith(durationSec: waveform.durationSec),
+                  _savedState.ai.bpm,
+                ).beats
+              : _savedState.ai.beats,
           segments: state.ai.segments,
           sourceSampleRate: waveform.sampleRate,
           sourceSamples: waveform.samples,
@@ -474,6 +508,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
       }
       nextAi = _applyCurrentMarkers(nextAi, state);
     }
+    if (state.bpmManual) nextAi = _withManualBpm(nextAi, state.ai.bpm);
     state = state.copyWith(
       ai: nextAi,
       tlIdx: ref.read(editorOptionsProvider).slmEnabled
@@ -960,6 +995,7 @@ class ReplaceEditorNotifier extends StateNotifier<ReplaceEditorState> {
     final config = TrackTimingConfig(
       source: state.track.source,
       bpm: state.ai.bpm,
+      bpmManual: state.bpmManual,
       markersSec: state.markerSeconds,
       confirmed: state.confirmedGroups,
       updatedAt: DateTime.now().toUtc(),
@@ -1260,7 +1296,7 @@ AiResult _aiFromAnalysis(AudioAnalysisResult result) {
 
 AiResult _applyConfig(AiResult ai, TrackTimingConfig config) {
   return _applyMarkers(
-    ai,
+    config.bpmManual ? _withManualBpm(ai, config.bpm) : ai,
     config.markersSec,
     bpm: config.bpm > 0 ? config.bpm : ai.bpm,
   );
@@ -1324,6 +1360,24 @@ AiResult _applyMarkers(
       firstLoop(ai.pl, 'PostRaceLoopStart', 'PostRaceLoopEnd', '已保存配置'),
       ...ai.pl.skip(1),
     ],
+  );
+}
+
+AiResult _withManualBpm(AiResult ai, double bpm) {
+  // Retain the first detected beat as the phase anchor. A fixed BPM cannot
+  // reproduce a changing tempo, but must agree with nudge and snap intervals.
+  final step = 60 / bpm;
+  final anchor = ai.beats.isEmpty ? 0.0 : ai.beats.first;
+  final phase = anchor % step;
+  List<LoopCandidate> loops(List<LoopCandidate> values) => [
+    for (final loop in values)
+      loop.copyWith(bars: _barsFor(loop.start, loop.end, bpm)),
+  ];
+  return ai.copyWith(
+    bpm: bpm,
+    beats: [for (double t = phase; t <= ai.durationSec; t += step) t],
+    tl: loops(ai.tl),
+    pl: loops(ai.pl),
   );
 }
 

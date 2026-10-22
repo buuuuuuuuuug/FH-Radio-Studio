@@ -259,53 +259,43 @@ void main() {
       expect(selection.ids.contains('d'), isTrue);
     },
   );
+  test('loop audition checks exactly one join and then stops', () {
+    final session = LoopAuditionSession(
+      start: 20,
+      end: 80,
+      options: const AuditionPreferences(before: 3, after: 4),
+    );
+    expect(session.auditionStart, 77);
+    expect(session.afterEnd, 24);
+    expect(session.observe(77), AuditionEvent.none);
+    expect(session.observe(79.8), AuditionEvent.none);
+    expect(session.observe(20.1), AuditionEvent.joined);
+    expect(session.observe(23.9), AuditionEvent.none);
+    expect(session.observe(24), AuditionEvent.finished);
+    expect(session.completeCycle(), AuditionEvent.none);
+    expect(session.completed, 1);
+  });
   test(
-    'finite loop audition only plays before B and after A, and counts exact joins',
-    () {
-      final session = LoopAuditionSession(
-        start: 20,
-        end: 80,
-        options: const AuditionPreferences(before: 3, after: 4, repetitions: 2),
-      );
-      expect(session.auditionStart, 77);
-      expect(session.afterEnd, 24);
-      expect(session.observe(77), AuditionEvent.none);
-      expect(session.observe(79.8), AuditionEvent.none);
-      expect(session.observe(20.1), AuditionEvent.joined);
-      expect(session.observe(23.9), AuditionEvent.none);
-      expect(session.observe(24), AuditionEvent.repeat);
-      expect(session.completeCycle(), AuditionEvent.none);
-      session.restart();
-      session.observe(77);
-      session.observe(79.8);
-      session.observe(20.1);
-      expect(session.observe(24), AuditionEvent.finished);
-      expect(session.completed, 2);
-    },
-  );
-  test(
-    'continuous audition is bounded to short loops and settings survive reload',
+    'short audition finishes once, ignores legacy repeat preference and preserves other settings',
     () async {
       final s = LoopAuditionSession(
         start: 10,
         end: 11,
-        options: const AuditionPreferences(before: 4, after: 5, repetitions: 0),
+        options: const AuditionPreferences(before: 4, after: 5),
       );
       expect(s.auditionStart, 10);
       expect(s.afterEnd, 11);
-      for (var i = 0; i < 12; i++) {
-        s.join();
-        expect(s.completeCycle(), AuditionEvent.repeat);
-        s.restart();
-      }
-      SharedPreferences.setMockInitialValues({});
+      s.join();
+      expect(s.completeCycle(), AuditionEvent.finished);
+      expect(s.completeCycle(), AuditionEvent.none);
+      SharedPreferences.setMockInitialValues({'rm.audition.repetitions': 0});
       final prefs = await SharedPreferences.getInstance();
       final c = ProviderContainer(
         overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
       );
       c
           .read(auditionPreferencesProvider.notifier)
-          .update(before: 6, after: 3, repetitions: 5, volume: 45);
+          .update(before: 6, after: 3, volume: 45);
       c.dispose();
       final c2 = ProviderContainer(
         overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
@@ -314,8 +304,10 @@ void main() {
       final options = c2.read(auditionPreferencesProvider);
       expect(options.before, 6);
       expect(options.after, 3);
-      expect(options.repetitions, 5);
       expect(options.volume, 45);
+      final restored = LoopAuditionSession(start: 10, end: 30, options: options)
+        ..join();
+      expect(restored.completeCycle(), AuditionEvent.finished);
     },
   );
   testWidgets(

@@ -137,8 +137,12 @@ PoolTrack poolTrackFromFile(
   final (fallbackArtist, fallbackTitle) = guessTrackMetadata(file);
   final metadataTitle = _meaningfulText(metadata?.title);
   final metadataArtist = _meaningfulArtist(metadata?.artist);
-  final title = sirenImport?.title ?? metadataTitle ?? fallbackTitle;
-  final artist = sirenImport?.artist ?? metadataArtist ?? fallbackArtist;
+  final title = metadata?.displayEdited == true
+      ? metadata!.title
+      : sirenImport?.title ?? metadataTitle ?? fallbackTitle;
+  final artist = metadata?.displayEdited == true
+      ? metadata!.artist
+      : sirenImport?.artist ?? metadataArtist ?? fallbackArtist;
   final duration = metadata?.durationSec ?? 0;
   final bpm = (_readDouble(config, 'bpm') ?? 0).round();
   final confirmed =

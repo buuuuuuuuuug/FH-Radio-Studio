@@ -1,6 +1,7 @@
 import 'timing_dialog_frame.dart';
 import '../core/atomic_file.dart';
 import 'rm_select.dart';
+import '../theme/tokens.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -26,6 +27,7 @@ class TimingExportButton extends ConsumerWidget {
           ? null
           : () => showDialog<void>(
               context: context,
+              barrierColor: RmTokens.modalBackdrop,
               builder: (_) => const TimingExportDialog(),
             ),
     );
@@ -110,6 +112,8 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
     final rm = context.rm;
     return TimingDialogFrame(
       title: '导出时间点',
+      icon: 'list',
+      description: '保存工程中已配置的时间点',
       busy: busy,
       width: 520,
       body: Column(
@@ -121,53 +125,73 @@ class _TimingExportDialogState extends ConsumerState<TimingExportDialog> {
             style: RmText.sans(12, color: rm.fg2),
           ),
           const SizedBox(height: 12),
-          Text('时间点的数据形式', style: RmText.sans(11.5, color: rm.fg2)),
-          const SizedBox(height: 5),
-          RmSelect<String>(
-            key: const ValueKey('timing-export-time-unit'),
-            value: timeUnit,
-            items: timingTimeUnits,
-            onChanged: busy ? null : (v) => setState(() => timeUnit = v),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            timeUnit == 'samples'
-                ? '固定 48000 Hz，导出为整数采样点；再次导入时请选择“采样点”形式。'
-                : '按分:秒.毫秒导出；若要保留采样点精度，请选择采样点形式。',
-            style: RmText.sans(11, color: rm.fg3),
+          DialogSettingsSection(
+            title: '导出选项',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('时间点的数据形式', style: RmText.sans(11.5, color: rm.fg2)),
+                const SizedBox(height: 5),
+                RmSelect<String>(
+                  key: const ValueKey('timing-export-time-unit'),
+                  value: timeUnit,
+                  items: timingTimeUnits,
+                  onChanged: busy ? null : (v) => setState(() => timeUnit = v),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  timeUnit == 'samples'
+                      ? '固定 48000 Hz，导出为整数采样点；再次导入时请选择“采样点”形式。'
+                      : '按分:秒.毫秒导出；若要保留采样点精度，请选择采样点形式。',
+                  style: RmText.sans(11, color: rm.fg3),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Filename 列使用的歌曲标识',
+                  style: RmText.sans(11.5, color: rm.fg2),
+                ),
+                const SizedBox(height: 5),
+                RmSelect<String>(
+                  value: identity,
+                  items: {
+                    for (final e in timingMatchModes.entries)
+                      if (e.key != 'auto') e.key: e.value,
+                  },
+                  onChanged: busy ? null : (v) => setState(() => identity = v),
+                ),
+                CheckboxListTile(
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(
+                    '包含 Radio_station 电台列',
+                    style: RmText.sans(12, color: rm.fg2),
+                  ),
+                  value: includeRadio,
+                  onChanged: busy
+                      ? null
+                      : (v) => setState(() => includeRadio = v == true),
+                ),
+                if (includeRadio)
+                  Text(
+                    '导出已保存播放列表中的 R1–R9 分配，多个电台用分号分隔。未保存的播放列表草稿不包含在内。',
+                    style: RmText.sans(11, color: rm.fg3),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
-          Text('Filename 列使用的歌曲标识', style: RmText.sans(11.5, color: rm.fg2)),
-          const SizedBox(height: 5),
-          RmSelect<String>(
-            value: identity,
-            items: {
-              for (final e in timingMatchModes.entries)
-                if (e.key != 'auto') e.key: e.value,
-            },
-            onChanged: busy ? null : (v) => setState(() => identity = v),
-          ),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: Text(
-              '包含 Radio_station 电台列',
-              style: RmText.sans(12, color: rm.fg2),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: rm.raised,
+              border: Border.all(color: rm.border),
+              borderRadius: BorderRadius.circular(RmTokens.rSm),
             ),
-            value: includeRadio,
-            onChanged: busy
-                ? null
-                : (v) => setState(() => includeRadio = v == true),
-          ),
-          if (includeRadio)
-            Text(
-              '导出已保存播放列表中的 R1–R9 分配，多个电台用分号分隔。未保存的播放列表草稿不包含在内。',
-              style: RmText.sans(11, color: rm.fg3),
+            child: Text(
+              '${timingCsvTemplateFor(includeRadio: includeRadio, timeUnit: timeUnit).split('\n').first}\nTL-A / PL-A 为起点，TL-B / PL-B 为终点；空白表示该时间点未配置。',
+              style: RmText.mono(11, color: rm.fg3),
             ),
-          const SizedBox(height: 12),
-          Text(
-            '${timingCsvTemplateFor(includeRadio: includeRadio, timeUnit: timeUnit).split('\n').first}\nTL-A / PL-A 为起点，TL-B / PL-B 为终点；空白表示该时间点未配置。',
-            style: RmText.sans(11.5, color: rm.fg3),
           ),
           if (message != null)
             Padding(

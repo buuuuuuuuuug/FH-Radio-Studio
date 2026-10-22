@@ -20,10 +20,11 @@ from .loudness import (
     MAX_CUSTOM_LOUDNESS_OFFSET_LU,
     MIN_CUSTOM_LOUDNESS_OFFSET_LU,
 )
-from .metadata import cmd_scan_metadata
+from .metadata import cmd_scan_metadata, cmd_set_track_metadata
 from .migration import cmd_migrate_project
 from .package import cmd_build_package
 from .package_estimate import cmd_estimate_package
+from .package_publication import cmd_discard_package_build, cmd_publish_package
 from .prepare import cmd_prepare_track
 from .radio_xml import cmd_patch_xml
 from .reconstruct_plan import cmd_reconstruct_plan
@@ -254,6 +255,27 @@ def build_parser() -> argparse.ArgumentParser:
     scan_metadata.add_argument("--json", action="store_true", help="Print JSON summary only")
     scan_metadata.set_defaults(func=cmd_scan_metadata)
 
+    edit_metadata = sub.add_parser(
+        "set-track-metadata", help="Set project display title and artist"
+    )
+    edit_metadata.add_argument("input")
+    edit_metadata.add_argument("--project-dir", required=True)
+    edit_metadata.add_argument("--title", required=True)
+    edit_metadata.add_argument("--artist", required=True)
+    edit_metadata.set_defaults(func=cmd_set_track_metadata)
+
+    publish = sub.add_parser(
+        "publish-package", help="Retry a completed package without re-encoding"
+    )
+    publish.add_argument("--out-dir", required=True)
+    publish.add_argument("--ready-dir", required=True)
+    publish.set_defaults(func=cmd_publish_package)
+
+    discard = sub.add_parser("discard-package-build", help=argparse.SUPPRESS)
+    discard.add_argument("--out-dir", required=True)
+    discard.add_argument("--build-dir", required=True)
+    discard.set_defaults(func=cmd_discard_package_build)
+
     migrate_project = sub.add_parser(
         "migrate-project",
         help="Migrate a 0.1.0 FH Radio Studio project to path_schema 2",
@@ -395,6 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
         "music", nargs="*", help="Music files or directories to pack into the target bank"
     )
     package.add_argument("--out-dir", required=True, help="Output package directory")
+    package.add_argument("--defer-publish", action="store_true", help=argparse.SUPPRESS)
     package.add_argument(
         "--reuse-package", help="Previous completed package for unchanged radio bank reuse"
     )

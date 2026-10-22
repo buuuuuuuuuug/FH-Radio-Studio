@@ -117,7 +117,13 @@ class AppShell extends ConsumerWidget {
               ),
             ),
           ],
-          if (blockForPackageBuild) _PackageBuildBlockingOverlay(cli: cli),
+          if (blockForPackageBuild)
+            _PackageBuildBlockingOverlay(
+              cli: cli,
+              onCancel: () => unawaited(
+                ref.read(studioProvider.notifier).cancelPackageBuild(),
+              ),
+            ),
           if (blockForToolchainFix)
             _ToolchainFixBlockingOverlay(
               cli: cli,
@@ -704,9 +710,13 @@ class _ToolchainLockedContent extends StatelessWidget {
 }
 
 class _PackageBuildBlockingOverlay extends StatelessWidget {
-  const _PackageBuildBlockingOverlay({required this.cli});
+  const _PackageBuildBlockingOverlay({
+    required this.cli,
+    required this.onCancel,
+  });
 
   final StudioState cli;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -728,7 +738,8 @@ class _PackageBuildBlockingOverlay extends StatelessWidget {
           const ModalBarrier(dismissible: false, color: Colors.transparent),
           PendingOverlay(
             key: const ValueKey('package-build-blocking-overlay'),
-            label: title,
+            label: cli.packageBuildCancelling ? '正在停止构建' : title,
+            interactive: true,
             labelTrailing: parallelLabel.isEmpty
                 ? null
                 : RmChip(
@@ -751,9 +762,21 @@ class _PackageBuildBlockingOverlay extends StatelessWidget {
             progressCaption: cli.hasPackageBuildProgress
                 ? '${cli.packageBuildProgressPercent}%'
                 : null,
-            progressExtra: concurrent
-                ? _PackageBuildConcurrentSteps(steps: running)
-                : null,
+            progressExtra: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (concurrent) _PackageBuildConcurrentSteps(steps: running),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: RmButton(
+                    key: const ValueKey('package-build-cancel'),
+                    label: cli.packageBuildCancelling ? '正在停止…' : '停止并返回',
+                    onPressed: cli.packageBuildCancellable ? onCancel : null,
+                  ),
+                ),
+              ],
+            ),
             borderRadius: BorderRadius.zero,
           ),
         ],

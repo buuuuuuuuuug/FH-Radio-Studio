@@ -67,6 +67,7 @@ from .loudness import (
 )
 from .metadata import (
     cached_loudness_analysis_for_path,
+    display_metadata_for_path,
     infer_metadata_cache_path_from_timing_manifest,
     load_track_asset_index,
     metadata_cache_path,
@@ -1619,7 +1620,7 @@ def prepare_music_tracks(
 
     prepared_tracks: List[Dict[str, object]] = []
     for index, music in enumerate(music_files, start=1):
-        artist, title = guess_metadata(music)
+        artist, title = display_metadata_for_path(music, metadata_cache, guess_metadata(music))
         prepared_wav = prepared_dir / (
             f"{index:0{slot_filename_width}d}.wav"
             if slot_filename_width is not None
@@ -2499,7 +2500,9 @@ def _plan_radio_bank_reuse(
                 {
                     "identity": identity,
                     "sha256": file_sha256(source),
-                    "metadata": guess_metadata(source),
+                    "metadata": display_metadata_for_path(
+                        source, _metadata_cache_path_for_args(args), guess_metadata(source)
+                    ),
                     "bpm": bpm_from_override(override, args.bpm),
                     "markers": {
                         name: marker_seconds_from_override(override, name)

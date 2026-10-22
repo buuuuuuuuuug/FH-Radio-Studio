@@ -13,6 +13,7 @@ class TrackMetadata {
     required this.artist,
     required this.title,
     required this.fromTags,
+    this.displayEdited = false,
     this.durationSec,
     this.sampleRate,
     this.channels,
@@ -24,6 +25,7 @@ class TrackMetadata {
   final String artist;
   final String title;
   final bool fromTags;
+  final bool displayEdited;
   final double? durationSec;
   final int? sampleRate;
   final int? channels;
@@ -84,6 +86,9 @@ class TrackMetadataCache {
           artist: artist,
           title: title,
           fromTags: item['from_tags'] == true,
+          displayEdited:
+              item['display_overrides'] is Map &&
+              (item['display_overrides'] as Map).isNotEmpty,
           durationSec: _readDouble(item, 'duration_sec'),
           sampleRate: _readInt(item, 'sample_rate'),
           channels: _readInt(item, 'channels'),

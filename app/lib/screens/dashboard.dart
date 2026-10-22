@@ -557,6 +557,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final built = await c.createPendingBaselineAndBuildPackage();
     if (!context.mounted) return;
     final latest = ref.read(studioProvider);
+    if (latest.packageBuildCancelled) return;
     if (built && latest.pendingPackageSummary != null) {
       final summary = latest.pendingPackageSummary!;
       await showPackageBuildSuccessDialog(

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import '../state/router.dart';
 import 'package:path/path.dart' as p;
 
 import '../theme/app_theme.dart';
@@ -162,14 +164,18 @@ class PackageBuildSuccessDialog extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '准备包只写入项目目录，不会直接覆盖游戏文件。',
+                      '准备包已生成。请前往概览页，点击「写入游戏」使其生效。',
                       style: RmText.sans(12, color: rm.fg3),
                     ),
                   ),
                   RmButton(
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () {
+                      final router = GoRouter.of(context);
+                      Navigator.of(context).pop();
+                      router.go(RmRoutes.dashboard);
+                    },
                     variant: RmButtonVariant.primary,
-                    label: '知道了',
+                    label: '前往概览写入游戏',
                   ),
                 ],
               ),

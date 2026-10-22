@@ -1,5 +1,7 @@
+import '../../widgets/split_playlist_dialog.dart';
 import '../../widgets/cross_radio_assignment_notice.dart';
 import '../../widgets/feature_tour.dart';
+import '../../widgets/package_publication_recovery.dart';
 import 'playlist_draggable.dart';
 import 'playlist_drag_preview.dart';
 import '../../widgets/open_package_folder_button.dart';
@@ -601,79 +603,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       ..setSplitPlaylistTypes(false);
   }
 
-  Future<bool> _confirmSplitPlaylistTypes(BuildContext context) async {
-    final result = await showDialog<bool>(
-      context: context,
-      barrierColor: RmTokens.modalBackdrop,
-      builder: (context) {
-        final rm = context.rm;
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(40),
-          child: Container(
-            width: 520,
-            decoration: BoxDecoration(
-              color: rm.panel,
-              border: Border.all(color: rm.borderStrong),
-              borderRadius: BorderRadius.circular(RmTokens.rXl),
-              boxShadow: RmTokens.modal,
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('高级模式', style: RmText.microLabel(color: rm.info)),
-                      const SizedBox(height: 8),
-                      Text('分开编辑漫游和比赛？', style: RmText.modalH2(color: rm.fg)),
-                      const SizedBox(height: 10),
-                      Text(
-                        '开启后会显示 FreeRoam 和 Event 两张独立列表。FreeRoam 用于开放世界漫游，Event 用于比赛内播放。',
-                        style: RmText.sans(13, color: rm.fg3, height: 1.45),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '关闭时如果两边不一致，需要选择保留哪一张，并用它覆盖另一张。',
-                        style: RmText.sans(13, color: rm.fg3, height: 1.45),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.fromLTRB(24, 14, 24, 22),
-                  decoration: BoxDecoration(
-                    border: Border(top: BorderSide(color: rm.border)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      RmButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        label: '取消',
-                      ),
-                      const SizedBox(width: 10),
-                      RmButton(
-                        onPressed: () => Navigator.of(context).pop(true),
-                        variant: RmButtonVariant.primary,
-                        leading: const RmIcon('list', size: 12),
-                        label: '打开',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    return result == true;
-  }
+  Future<bool> _confirmSplitPlaylistTypes(BuildContext context) async =>
+      await showSplitPlaylistConfirmation(context) == true;
 
   Future<String?> _choosePlaylistTypeToKeep(BuildContext context) {
     return showDialog<String>(
@@ -958,6 +889,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
     if (!mounted) return;
     if (!context.mounted) return;
     final latest = ref.read(studioProvider);
+    if (latest.packageBuildCancelled) return;
     if (built) {
       ref.read(playlistPlanProvider.notifier).save();
       final summary = latest.lastPackageSummary;
@@ -1079,6 +1011,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _pageHead(context, cli, view).tourAnchor('build'),
+                  const PackagePublicationRecovery(),
                   if (cli.projectEditingLocked) ...[
                     const SizedBox(height: 12),
                     RmBanner(
@@ -1392,6 +1325,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
                   ],
                   splitSwitch,
                   if (s.splitPlaylistTypes) segmented,
+                  if (s.splitPlaylistTypes)
+                    Text(
+                      '分场景编辑为实验功能，当前不推荐使用；建议关闭后使用统一列表。',
+                      style: RmText.sans(12, color: rm.warn),
+                    ),
                   if (view == PlaylistCatalogView.package)
                     Text('双击自建曲目进入编辑', style: RmText.sans(11.5, color: rm.fg3)),
                 ],

@@ -157,7 +157,11 @@ class EditorSidePanel extends ConsumerWidget {
                       '采样数 (48k)',
                       formatSamples(ai.durationSec, 48000),
                     ),
-                    _row(context, 'BPM', ai.bpm.toStringAsFixed(1)),
+                    _row(
+                      context,
+                      state.bpmManual ? 'BPM · 手动' : 'BPM',
+                      ai.bpm.toStringAsFixed(1),
+                    ),
                     if (!manualOnly) _row(context, '节拍数', '${ai.beats.length}'),
                     Container(
                       height: 1,

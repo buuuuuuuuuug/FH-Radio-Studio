@@ -94,7 +94,7 @@ class _ProjectPickerScreenState extends ConsumerState<ProjectPickerScreen> {
                       child: _BootCard(
                         icon: 'plus',
                         title: '新建工程',
-                        body: '选择一个文件夹作为自包含项目目录，素材、包和原始备份都会放在里面。',
+                        body: '选择完整路径不含中文的英文文件夹，素材、包和原始备份都会放在里面。',
                         onTap: projectActionsEnabled
                             ? () => _pickProject(
                                 cli.projectDir,

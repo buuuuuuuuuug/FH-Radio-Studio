@@ -56,6 +56,16 @@ class FhRadioStudioProject {
     return p.join(metadataDir(projectDir), 'project.json');
   }
 
+  static String? newProjectPathError(String projectDir) {
+    final absolute = Directory(projectDir).absolute.path;
+    if (absolute.runes.any((code) => code > 0x7f)) {
+      return '新工程的完整路径（包括上级文件夹）不能包含中文或其他非英文字符。'
+          '请选择英文路径，例如 D:\\FHRadioProjects\\MyProject。'
+          '已有工程仍可打开，请勿直接改名以免找不到原工程。';
+    }
+    return null;
+  }
+
   static bool isAudioPath(String path) {
     return _audioSuffixes.contains(p.extension(path).toLowerCase());
   }

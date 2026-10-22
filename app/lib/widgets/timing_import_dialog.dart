@@ -19,6 +19,8 @@ import '../theme/app_theme.dart';
 import '../theme/text_styles.dart';
 import 'rm_button.dart';
 import 'rm_select.dart';
+import 'rm_field.dart';
+import '../theme/tokens.dart';
 import 'quick_assign_dialog.dart';
 import 'timing_match_modes.dart';
 
@@ -58,6 +60,7 @@ class TimingImportButton extends ConsumerWidget {
           ? null
           : () => showDialog<void>(
               context: context,
+              barrierColor: RmTokens.modalBackdrop,
               builder: (_) => const TimingImportDialog(),
             ),
     );
@@ -277,6 +280,8 @@ class _TimingImportDialogState extends ConsumerState<TimingImportDialog> {
     );
     return TimingDialogFrame(
       title: '批量导入时间点',
+      icon: 'list',
+      description: '选择数据、预览匹配，再应用到工程',
       busy: busy,
       width: 820,
       body: Column(
@@ -310,9 +315,9 @@ class _TimingImportDialogState extends ConsumerState<TimingImportDialog> {
               minLines: 4,
               maxLines: 7,
               style: RmText.mono(11.5, color: rm.fg),
-              decoration: const InputDecoration(
-                hintText: '在此粘贴 CSV、表格文本或 JSON',
-                border: OutlineInputBorder(),
+              decoration: rmFieldDecoration(
+                context,
+                hint: '在此粘贴 CSV、表格文本或 JSON',
               ),
               onChanged: (_) => setState(invalidate),
             ),
@@ -370,128 +375,136 @@ class _TimingImportDialogState extends ConsumerState<TimingImportDialog> {
               ),
             ),
           const SizedBox(height: 14),
-          if (xmlInput &&
-              file!.replaceAll('\\', '/').contains('/packages/')) ...[
-            Text(
-              '此文件来自准备包，将按其中的排布导入；恢复较早排布请选择对应备份。',
-              style: RmText.sans(11.5, color: rm.warn),
-            ),
-            const SizedBox(height: 8),
-          ],
-          if (xmlInput)
-            Text(
-              '仅读取赛事（Event），按歌曲名和歌手自动匹配；采样率须为 48000 Hz。',
-              style: RmText.sans(11.5, color: rm.fg2),
-            )
-          else ...[
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final fields = [
-                  selectField(
-                    'Filename 列的匹配方式',
-                    RmSelect<String>(
-                      key: const ValueKey('timing-import-match-mode'),
-                      value: matchMode,
-                      items: timingMatchModes,
-                      onChanged: busy
+          DialogSettingsSection(
+            title: '导入选项',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (xmlInput &&
+                    file!.replaceAll('\\', '/').contains('/packages/')) ...[
+                  Text(
+                    '此文件来自准备包，将按其中的排布导入；恢复较早排布请选择对应备份。',
+                    style: RmText.sans(11.5, color: rm.warn),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (xmlInput)
+                  Text(
+                    '仅读取赛事（Event），按歌曲名和歌手自动匹配；采样率须为 48000 Hz。',
+                    style: RmText.sans(11.5, color: rm.fg2),
+                  )
+                else ...[
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final fields = [
+                        selectField(
+                          'Filename 列的匹配方式',
+                          RmSelect<String>(
+                            key: const ValueKey('timing-import-match-mode'),
+                            value: matchMode,
+                            items: timingMatchModes,
+                            onChanged: busy
+                                ? null
+                                : (v) => setState(() {
+                                    matchMode = v;
+                                    invalidate();
+                                  }),
+                          ),
+                        ),
+                        selectField(
+                          '数据中的时间点形式',
+                          RmSelect<String>(
+                            key: const ValueKey('timing-import-time-unit'),
+                            value: timeUnit,
+                            items: timingTimeUnits,
+                            onChanged: busy
+                                ? null
+                                : (v) => setState(() {
+                                    timeUnit = v;
+                                    invalidate();
+                                  }),
+                          ),
+                        ),
+                      ];
+                      return constraints.maxWidth < 560
+                          ? Column(
+                              children: [
+                                fields[0],
+                                const SizedBox(height: 10),
+                                fields[1],
+                              ],
+                            )
+                          : Row(
+                              children: [
+                                Expanded(child: fields[0]),
+                                const SizedBox(width: 12),
+                                Expanded(child: fields[1]),
+                              ],
+                            );
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${matchMode == 'auto' ? '仅接受唯一匹配；重名时建议用文件名。' : 'Filename 按“${timingMatchModes[matchMode]}”填写。'} '
+                    '${timeUnit == 'samples' ? '采样点须为非负整数，固定按 48000 Hz 换算。' : '时间可填 分:秒.毫秒 或 秒数。'}',
+                    style: RmText.sans(11, color: rm.fg3),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                _check(
+                  context,
+                  xmlInput ? '按 XML 电台归属分配' : '使用 Radio_station 列分配电台',
+                  assignRadio,
+                  busy
+                      ? null
+                      : (v) => setState(() {
+                          assignRadio = v;
+                          invalidate();
+                        }),
+                ),
+                if (assignRadio)
+                  Text(
+                    xmlInput
+                        ? '按文件重建列表；匹配到本地歌曲时保持可编辑。未分场景时同步漫游，分场景时只更新赛事。'
+                        : '填写 R1–R9，多个电台用分号分隔；空白不改分配。先检查容量，再更新播放列表草稿。',
+                    style: RmText.sans(11, color: rm.fg3),
+                  ),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 2,
+                  children: [
+                    _check(
+                      context,
+                      '允许覆盖已有时间组',
+                      overwrite,
+                      busy
                           ? null
                           : (v) => setState(() {
-                              matchMode = v;
+                              overwrite = v;
                               invalidate();
                             }),
                     ),
-                  ),
-                  selectField(
-                    '数据中的时间点形式',
-                    RmSelect<String>(
-                      key: const ValueKey('timing-import-time-unit'),
-                      value: timeUnit,
-                      items: timingTimeUnits,
-                      onChanged: busy
+                    _check(
+                      context,
+                      '将完整时间组标记为已确认',
+                      confirm,
+                      busy
                           ? null
                           : (v) => setState(() {
-                              timeUnit = v;
+                              confirm = v;
                               invalidate();
                             }),
                     ),
-                  ),
-                ];
-                return constraints.maxWidth < 560
-                    ? Column(
-                        children: [
-                          fields[0],
-                          const SizedBox(height: 10),
-                          fields[1],
-                        ],
-                      )
-                    : Row(
-                        children: [
-                          Expanded(child: fields[0]),
-                          const SizedBox(width: 12),
-                          Expanded(child: fields[1]),
-                        ],
-                      );
-              },
+                  ],
+                ),
+                Text(
+                  overwrite
+                      ? '空白节点会清除原值，未包含的列保留。导入前自动备份。'
+                      : '默认跳过已有时间组，未完成组保持待配置。导入前自动备份。',
+                  style: RmText.sans(11, color: rm.fg3),
+                ),
+              ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              '${matchMode == 'auto' ? '仅接受唯一匹配；重名时建议用文件名。' : 'Filename 按“${timingMatchModes[matchMode]}”填写。'} '
-              '${timeUnit == 'samples' ? '采样点须为非负整数，固定按 48000 Hz 换算。' : '时间可填 分:秒.毫秒 或 秒数。'}',
-              style: RmText.sans(11, color: rm.fg3),
-            ),
-          ],
-          const SizedBox(height: 8),
-          _check(
-            context,
-            xmlInput ? '按 XML 电台归属分配' : '使用 Radio_station 列分配电台',
-            assignRadio,
-            busy
-                ? null
-                : (v) => setState(() {
-                    assignRadio = v;
-                    invalidate();
-                  }),
-          ),
-          if (assignRadio)
-            Text(
-              xmlInput
-                  ? '按文件重建列表；匹配到本地歌曲时保持可编辑。未分场景时同步漫游，分场景时只更新赛事。'
-                  : '填写 R1–R9，多个电台用分号分隔；空白不改分配。先检查容量，再更新播放列表草稿。',
-              style: RmText.sans(11, color: rm.fg3),
-            ),
-          Wrap(
-            spacing: 10,
-            runSpacing: 2,
-            children: [
-              _check(
-                context,
-                '允许覆盖已有时间组',
-                overwrite,
-                busy
-                    ? null
-                    : (v) => setState(() {
-                        overwrite = v;
-                        invalidate();
-                      }),
-              ),
-              _check(
-                context,
-                '将完整时间组标记为已确认',
-                confirm,
-                busy
-                    ? null
-                    : (v) => setState(() {
-                        confirm = v;
-                        invalidate();
-                      }),
-              ),
-            ],
-          ),
-          Text(
-            overwrite
-                ? '空白节点会清除原值，未包含的列保留。导入前自动备份。'
-                : '默认跳过已有时间组，未完成组保持待配置。导入前自动备份。',
-            style: RmText.sans(11, color: rm.fg3),
           ),
           if (!xmlInput) ...[
             const SizedBox(height: 12),

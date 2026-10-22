@@ -43,14 +43,13 @@ void main() {
       final n = c.read(auditionPreferencesProvider.notifier);
       expect(n.state.tdDuration, 6);
       expect(n.state.pdDuration, 6);
-      n.update(tdDuration: 9, pdDuration: 14, before: 3, repetitions: 2);
+      n.update(tdDuration: 9, pdDuration: 14, before: 3);
       await Future<void>.delayed(Duration.zero);
       c.invalidate(auditionPreferencesProvider);
       final restored = c.read(auditionPreferencesProvider);
       expect(restored.pointDuration(false), 9);
       expect(restored.pointDuration(true), 14);
       expect(restored.before, 3);
-      expect(restored.repetitions, 2);
       c
           .read(auditionPreferencesProvider.notifier)
           .update(tdDuration: -1, pdDuration: 99);

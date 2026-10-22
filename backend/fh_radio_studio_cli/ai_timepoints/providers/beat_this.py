@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -356,6 +357,5 @@ def _estimate_bpm(beats: List[float]) -> Optional[float]:
     ]
     if not diffs:
         return None
-    diffs = sorted(diffs)
-    step = diffs[len(diffs) // 2]
+    step = median(diffs)
     return round(60.0 / step, 3) if step > 0 else None

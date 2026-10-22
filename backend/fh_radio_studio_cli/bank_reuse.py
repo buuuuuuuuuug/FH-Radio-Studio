@@ -7,7 +7,6 @@ import hashlib
 import json
 import shutil
 import tempfile
-import uuid
 from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
@@ -17,6 +16,13 @@ from pathlib import Path
 
 from .common import CliError
 from .file_lock import FileLockTimeout, exclusive_file_lock
+from .package_publication import (
+    check_target,
+    completed_packages,
+    mark_complete,
+    owned_sibling,
+    publish_completed,
+)
 
 VERSION = 1
 
@@ -173,55 +179,51 @@ def atomic_package_build(function):
     @wraps(function)
     def publish(args):
         target = Path(args.out_dir).expanduser().absolute()
-        if target.exists() and not target.is_dir():
-            raise CliError("准备包输出位置必须是目录")
-        if target.is_symlink():
-            raise CliError("准备包输出目录不能是链接目录")
+        check_target(target)
         manifest = target / "package/fh_radio_studio_package_manifest.json"
-        if target.exists() and any(target.iterdir()) and not manifest.is_file():
-            raise CliError(f"输出目录不是完整准备包，请选择新的输出目录：{target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=f".{target.name}-building-", dir=target.parent))
-        backup = target.with_name(f".{target.name}-previous-{uuid.uuid4().hex}")
+        if getattr(args, "defer_publish", False):
+            print(
+                "FH_RADIO_STUDIO_PACKAGE_STAGE "
+                + json.dumps({"target": str(target), "stage": str(stage)}),
+                flush=True,
+            )
 
         # Validate exact owned paths before any recursive cleanup or rename.
         def owned(path):
-            if path.is_symlink() or path.resolve().parent != target.parent.resolve():
-                raise CliError("准备包临时目录超出预期位置")
-            return path
+            return owned_sibling(target, path)
 
         clone = argparse.Namespace(**vars(args))
         clone.out_dir = str(stage)
         clone._publish_out_dir = str(target)
-        clone.reuse_package = getattr(args, "reuse_package", None) or (
-            str(target) if manifest.is_file() else None
+        ready = completed_packages(target)
+        clone.reuse_package = (
+            getattr(args, "reuse_package", None)
+            or (str(ready[0]) if ready else None)
+            or (str(target) if manifest.is_file() else None)
         )
-        published = False
+        completed = False
         try:
             result = function(clone)
             if result != 0:
                 return result
             if not (stage / "package/fh_radio_studio_package_manifest.json").is_file():
                 raise CliError("构建未生成完整准备包清单，已保留旧准备包")
-            if target.exists():
-                owned(target).rename(owned(backup))
-            try:
-                owned(stage).rename(target)
-            except BaseException:
-                if backup.exists():
-                    owned(backup).rename(target)
-                raise
-            published = True
-            print(f"准备包已完成：{target}")
+            mark_complete(target, stage)
+            completed = True
+            if getattr(args, "defer_publish", False):
+                print(
+                    "FH_RADIO_STUDIO_PACKAGE_READY "
+                    + json.dumps({"target": str(target), "ready": str(stage)}),
+                    flush=True,
+                )
+                return result
+            publish_completed(target, stage)
             return result
         finally:
-            if stage.exists():
+            if stage.exists() and not completed:
                 shutil.rmtree(owned(stage))
-            if published and backup.exists():
-                try:
-                    shutil.rmtree(owned(backup))
-                except OSError as error:
-                    print(f"旧准备包清理未完成，保留于 {backup}: {error}")
 
     @wraps(function)
     def build(args):

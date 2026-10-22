@@ -120,6 +120,10 @@ def _deploy_package(args: argparse.Namespace, game_dir: Path) -> int:
     game_version = steam_game_version(game_dir)
     package_dir = Path(args.package_dir).expanduser()
     package_root = package_root_dir(package_dir)
+    from .package_transaction import journal_path
+
+    if journal_path(package_root.parent).exists():
+        raise CliError("准备包正在替换或等待恢复，请先重试替换完成后再写入游戏")
     package_manifest_path = package_root / "fh_radio_studio_package_manifest.json"
     package_manifest = (
         load_manifest(package_manifest_path) if package_manifest_path.exists() else {}

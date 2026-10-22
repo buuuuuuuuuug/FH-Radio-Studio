@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 const appDisplayName = 'FH Radio Studio · 循环分析实验版';
-const fallbackAppReleaseId = '0.2.1-improve.2+76';
+const fallbackAppReleaseId = '0.2.1-preview.3+80';
 const noneBuildCommitSha256 = 'None';
 
 const _definedReleaseId = String.fromEnvironment('FH_RADIO_STUDIO_RELEASE_ID');
@@ -150,5 +150,7 @@ bool shouldShowBuildInfoForBranchName(String? branchName) {
 bool _isReleaseBranchName(String? branchName) {
   final normalized = branchName?.trim().toLowerCase();
   if (normalized == null || normalized.isEmpty) return false;
-  return RegExp(r'^release/v\d+\.\d+\.\d+(-rc\.\d+)?$').hasMatch(normalized);
+  return RegExp(
+    r'^release/v\d+\.\d+\.\d+(-(rc|preview)\.\d+)?$',
+  ).hasMatch(normalized);
 }

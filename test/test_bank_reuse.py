@@ -262,10 +262,14 @@ def test_publication_rename_failure_rolls_back_old_package(tmp_path, monkeypatch
         (package / "fh_radio_studio_package_manifest.json").write_text("{}")
         return 0
 
-    with pytest.raises(OSError):
+    with pytest.raises(CliError, match="已保留"):
         build(argparse.Namespace(out_dir=str(root.parent)))
     assert bank.read_bytes() == b"encoded-bank"
-    assert not list(tmp_path.glob(".current-*"))
+    from backend.fh_radio_studio_cli.package_publication import completed_packages
+
+    ready = completed_packages(root.parent)
+    assert len(ready) == 1
+    assert (ready[0] / "package/fh_radio_studio_package_manifest.json").is_file()
 
 
 def test_previous_package_accepts_all_supported_path_forms(tmp_path):

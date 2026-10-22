@@ -1,8 +1,8 @@
 import '../state/audition_preferences.dart';
 
-enum AuditionPhase { before, after, advancing, finished }
+enum AuditionPhase { before, after, finished }
 
-enum AuditionEvent { none, joined, repeat, finished }
+enum AuditionEvent { none, joined, finished }
 
 class LoopAuditionSession {
   LoopAuditionSession({
@@ -44,12 +44,8 @@ class LoopAuditionSession {
   AuditionEvent completeCycle() {
     if (phase != AuditionPhase.after) return AuditionEvent.none;
     completed++;
-    if (options.repetitions > 0 && completed >= options.repetitions) {
-      phase = AuditionPhase.finished;
-      return AuditionEvent.finished;
-    }
-    phase = AuditionPhase.advancing;
-    return AuditionEvent.repeat;
+    phase = AuditionPhase.finished;
+    return AuditionEvent.finished;
   }
 
   void restart() {

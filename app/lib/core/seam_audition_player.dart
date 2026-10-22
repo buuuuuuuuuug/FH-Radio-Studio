@@ -178,9 +178,7 @@ class SeamAuditionPlayer {
   }
 
   void _dispatch(AuditionEvent event) {
-    if (event == AuditionEvent.repeat) {
-      unawaited(_restart());
-    } else if (event == AuditionEvent.finished) {
+    if (event == AuditionEvent.finished) {
       unawaited(_finish());
     }
   }

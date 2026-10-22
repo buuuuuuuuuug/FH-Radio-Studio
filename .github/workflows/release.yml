@@ -15,7 +15,7 @@ on:
           - stage
           - publish-latest
       release_ref:
-        description: "Release branch or id to publish, for example release/v0.1.0-rc.2"
+        description: "Release branch or id to publish, for example release/v0.2.1-preview.3"
         required: false
         type: string
       source_run_id:
@@ -228,14 +228,14 @@ jobs:
           }
           $releaseRef = $releaseRef -replace '^refs/heads/', '' -replace '^refs/tags/', ''
 
-          if ($releaseRef -match '^release/(v\d+\.\d+\.\d+(-rc\.\d+)?(\+\d+)?)$') {
+          if ($releaseRef -match '^release/(v\d+\.\d+\.\d+(-(rc|preview)\.\d+)?(\+\d+)?)$') {
             $releaseId = $Matches[1]
             $releaseBranch = $releaseRef
-          } elseif ($releaseRef -match '^(v\d+\.\d+\.\d+(-rc\.\d+)?(\+\d+)?)$') {
+          } elseif ($releaseRef -match '^(v\d+\.\d+\.\d+(-(rc|preview)\.\d+)?(\+\d+)?)$') {
             $releaseId = $Matches[1]
             $releaseBranch = "release/$releaseId"
           } else {
-            throw "Set release_ref to a release branch or id such as release/v0.1.0-rc.2."
+            throw "Set release_ref to a release branch or id such as release/v0.2.1-preview.3."
           }
 
           $artifactName = "FHRadioStudio-$releaseId-windows-x64"

@@ -168,6 +168,59 @@ def metadata_cache_path(project_dir: Path) -> Path:
     return project_dir / ".fh-radio-studio" / TRACK_METADATA_CACHE_NAME
 
 
+def display_metadata_for_path(path: Path, cache_path: Optional[Path], fallback: tuple[str, str]):
+    """Use project display overrides without changing the audio or its identity."""
+    if cache_path is None:
+        return fallback
+    entries = _load_cache_entries(cache_path)
+    entry = entries.get(_cache_key_for_path(cache_path.parent.parent, path)) or {}
+    overrides = entry.get("display_overrides")
+    if not isinstance(overrides, dict):
+        return fallback
+
+    def value(key, default):
+        raw = overrides.get(key)
+        return raw if isinstance(raw, str) and raw.strip() else default
+
+    return value("artist", fallback[0]), value("title", fallback[1])
+
+
+def cmd_set_track_metadata(args: argparse.Namespace) -> int:
+    project = Path(args.project_dir).expanduser().resolve()
+    source = Path(args.input).expanduser().resolve()
+    ref = project_ref_for_path(project, source)
+    if (
+        ref is None
+        or not source.is_file()
+        or source.parent not in (project / "sources", project / "siren")
+    ):
+        die("只能修改当前工程 sources 或 siren 中的歌曲信息")
+    values = {"title": args.title.strip(), "artist": args.artist.strip()}
+    for value in values.values():
+        if (
+            not value
+            or len(value) > 256
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            die("歌曲名和歌手不能为空，最多 256 个字符，且不能包含换行或控制字符")
+    cache = metadata_cache_path(project)
+    with _metadata_cache_write_lock(cache):
+        entries = _load_cache_entries(cache)
+        key = _cache_key_for_path(project, source)
+        entry = build_track_metadata_cache_entry(
+            source,
+            existing=entries.get(key),
+            project_dir=project,
+            artwork_dir=cache.parent / "artwork",
+        )
+        entry["display_overrides"] = values
+        entry.update(values)
+        entries[key] = entry
+        _write_cache_entries(cache, entries)
+    print(json.dumps({"source_ref": ref, **values}, ensure_ascii=False))
+    return 0
+
+
 @contextmanager
 def _metadata_cache_write_lock(cache_path: Path, *, timeout_sec: float = 120.0):
     """Serialize metadata cache read-modify-write transactions across processes."""
@@ -337,6 +390,14 @@ def build_track_metadata_cache_entry(
         preserved = _preserved_loudness_payload(existing, stat)
         if preserved is not None:
             entry[LOUDNESS_ANALYSIS_CACHE_KEY] = preserved
+    if existing and isinstance(existing.get("display_overrides"), dict):
+        overrides = {
+            key: value
+            for key, value in existing["display_overrides"].items()
+            if key in ("title", "artist") and isinstance(value, str) and value.strip()
+        }
+        entry["display_overrides"] = overrides
+        entry.update(overrides)
     return entry
 
 
